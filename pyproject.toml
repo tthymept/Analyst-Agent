@@ -1,0 +1,23 @@
+[project]
+name = "analyst-agent"
+version = "0.1.0"
+description = "Personal data platform: Google Sheet -> Databricks bronze/silver/gold -> dashboard -> LLM analyst agent"
+readme = "README.md"
+authors = [
+    { name = "Thyme Pataradilok" }
+]
+requires-python = ">=3.12"
+dependencies = [
+    "databricks-sdk>=0.30",
+    "google-api-python-client>=2.100",
+    "google-auth>=2.20",
+    "python-dotenv>=1.0",
+]
+
+[project.scripts]
+analyst-agent = "analyst_agent:main"
+ingest-sheet = "analyst_agent.ingest.pull_sheet:main"
+
+[build-system]
+requires = ["uv_build>=0.12.11,<0.13.0"]
+build-backend = "uv_build"
