@@ -1,0 +1,27 @@
+# Secrets: never commit these
+.env
+*.env
+*service-account*.json
+*-key.json
+.databrickscfg
+
+# Data: keep the repo public-safe, data lives in Databricks
+data/
+*.xlsx
+*.csv
+snapshot_*.json
+
+# Databricks bundle cache
+.databricks/
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+.pytest_cache/
+
+# Editors / OS
+.vscode/settings.json
+.DS_Store
+Thumbs.db

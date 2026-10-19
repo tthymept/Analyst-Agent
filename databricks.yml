@@ -1,0 +1,21 @@
+# Databricks Asset Bundle: defines everything this repo deploys to Databricks.
+# Deploy:  databricks bundle deploy          (uses the "dev" target)
+# Run:     databricks bundle run bronze_load
+#
+# The workspace URL is deliberately NOT in this file (public repo). The CLI reads it from
+# ~/.databrickscfg (after `databricks configure`) or from the DATABRICKS_HOST env var / GitHub Secret.
+bundle:
+  name: analyst_agent
+
+include:
+  - resources/*.yml
+
+variables:
+  catalog:
+    description: Unity Catalog catalog that holds the bronze/silver/gold schemas
+    default: workspace   # Free Edition's default catalog; change if yours is named differently
+
+targets:
+  dev:
+    mode: development   # prefixes job names with [dev <you>] and keeps everything in your user folder
+    default: true

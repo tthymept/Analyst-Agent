@@ -1,0 +1,28 @@
+# Daily: pull the Google Sheet -> upload a raw snapshot to the Volume -> run the bronze_load job.
+# Public repo: never print amounts or rows here; workflow logs are visible to everyone.
+name: ingest
+
+on:
+  schedule:
+    - cron: "0 18 * * *"   # 18:00 UTC = 02:00 Singapore time, every day
+  workflow_dispatch:        # lets you press "Run workflow" by hand in the Actions tab
+
+concurrency: ingest
+
+jobs:
+  ingest:
+    runs-on: ubuntu-latest
+    env:
+      DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST }}
+      DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN }}
+      GOOGLE_SA_JSON: ${{ secrets.GOOGLE_SA_JSON }}
+      SHEET_ID: ${{ secrets.SHEET_ID }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6   # installs uv; Python comes from .python-version
+      - run: uv sync --locked
+      - name: Pull sheet and upload snapshot
+        run: uv run ingest-sheet
+      - uses: databricks/setup-cli@main
+      - name: Load new snapshots into bronze
+        run: databricks bundle run bronze_load -t dev
