@@ -1,0 +1,22 @@
+# Job: Google Sheet snapshots -> bronze -> silver. Started by the ingest workflow after each upload.
+# No cluster is defined, so the tasks run on serverless compute (the only option on Free Edition).
+resources:
+  jobs:
+    sheet_pipeline:
+      name: sheet_pipeline
+      max_concurrent_runs: 1
+      tasks:
+        - task_key: bronze_load
+          notebook_task:
+            notebook_path: ../notebooks/bronze/load_snapshots.py
+            base_parameters:
+              catalog: ${var.catalog}
+
+        - task_key: silver_transactions
+          depends_on:
+            - task_key: bronze_load
+          notebook_task:
+            notebook_path: ../notebooks/silver/build_transactions.py
+            base_parameters:
+              catalog: ${var.catalog}
+              src_path: ${workspace.file_path}/src

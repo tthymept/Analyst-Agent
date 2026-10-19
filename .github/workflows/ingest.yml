@@ -1,4 +1,4 @@
-# Daily: pull the Google Sheet -> upload a raw snapshot to the Volume -> run the bronze_load job.
+# Daily: pull the Google Sheet -> upload a raw snapshot to the Volume -> run the sheet_pipeline job (bronze -> silver).
 # Public repo: never print amounts or rows here; workflow logs are visible to everyone.
 name: ingest
 
@@ -20,9 +20,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v6   # installs uv; Python comes from .python-version
-      - run: uv sync --locked
+      - run: uv sync --locked --no-dev   # dev tools (pyspark, pytest) are only needed for tests
       - name: Pull sheet and upload snapshot
         run: uv run ingest-sheet
       - uses: databricks/setup-cli@main
-      - name: Load new snapshots into bronze
-        run: databricks bundle run bronze_load -t dev
+      - name: Load new snapshots into bronze, then rebuild silver
+        run: databricks bundle run sheet_pipeline -t dev
