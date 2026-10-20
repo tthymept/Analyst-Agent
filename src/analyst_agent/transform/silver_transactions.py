@@ -223,6 +223,28 @@ def flag_one_offs(df: DataFrame, exclusions: DataFrame) -> DataFrame:
     )
 
 
+def flag_reimbursable(df: DataFrame) -> DataFrame:
+    """Work money I pay out and get back, listed by row in rules.py or marked in the Note column."""
+    marked = F.lower(F.coalesce(F.col("note"), F.lit(""))).rlike(rules.REIMBURSABLE_NOTE_PATTERN)
+    for tab, rows in rules.REIMBURSABLE_ROWS.items():
+        marked = marked | ((F.col("tab") == tab) & F.col("row_num").isin(rows))
+    return df.withColumn("is_reimbursable", marked)
+
+
+def study_terms(df: DataFrame) -> DataFrame:
+    """Study year (1 = Aug 2025 to May 2026) and semester (1 = Aug-Dec, 2 = Jan-May) from the date."""
+    month = F.month("txn_date")
+    semester = (F.when(month.isin(rules.SEMESTER_1_MONTHS), F.lit(1))
+                .when(month.isin(rules.SEMESTER_2_MONTHS), F.lit(2)))
+    year_start = F.year("txn_date") - F.when(month < min(rules.SEMESTER_1_MONTHS), 1).otherwise(0)
+    study_year = F.when(semester.isNotNull(), year_start - rules.FIRST_STUDY_YEAR + 1)
+    return (
+        df.withColumn("study_year", study_year)
+        .withColumn("semester", semester)
+        .withColumn("term", F.when(semester.isNotNull(), F.format_string("Y%dS%d", "study_year", "semester")))
+    )
+
+
 def build_silver(bronze: DataFrame) -> DataFrame:
     rows = named_columns(month_tabs(latest_snapshot(bronze)))
     rows = resolve_dates(rows)
@@ -230,6 +252,7 @@ def build_silver(bronze: DataFrame) -> DataFrame:
 
     txns = to_transactions(clean_items(rows))
     txns = flag_one_offs(fix_categories(txns), exclusions)
+    txns = study_terms(flag_reimbursable(txns))
 
     txn_id = F.sha2(F.concat_ws("|", "tab", "row_num", "direction", "item", F.col("amount_sgd").cast("string")), 256)
     return txns.select(
@@ -245,7 +268,11 @@ def build_silver(bronze: DataFrame) -> DataFrame:
         "payment_method",
         "note",
         "is_one_off",
+        "is_reimbursable",
         "excluded_in_sheet",
+        "study_year",
+        "semester",
+        "term",
         "date_fix",
         F.col("tab").alias("source_tab"),
         F.col("row_num").alias("source_row"),
@@ -265,6 +292,7 @@ def data_tests(silver: DataFrame) -> dict[str, dict]:
         "date_outside_tab_month": ("error", (F.col("txn_date") < F.add_months(tab_start, -1))
                                    | (F.col("txn_date") >= F.add_months(tab_start, 1))),
         "amount_not_positive": ("error", ~F.coalesce(F.col("amount_sgd") > 0, F.lit(False))),
+        "outside_semester": ("warn", F.col("semester").isNull()),
         "expense_category_unknown": ("warn", (F.col("txn_kind") == "expense")
                                      & ~F.coalesce(F.col("category").isin(rules.EXPENSE_CATEGORIES), F.lit(False))),
         "category_changed_by_cleaning": ("warn", (F.col("txn_kind") == "expense")

@@ -62,7 +62,7 @@ Every night at 02:00 Singapore time:
    one row per sheet row, unchanged. Snapshots already loaded are skipped, so re-running is safe.
 4. **Clean (silver, full rebuild).** The second task (`notebooks/silver/build_transactions.py`) rebuilds
    `workspace.silver.transactions` from scratch from the **newest** snapshot, runs data tests, and only overwrites
-   the table if they pass. See [Silver: cleaning rules](#silver-cleaning-rules).
+   the table if they pass. See [Silver: `transactions`](#silver-transactions).
 5. **Gold** (next): metrics for the dashboard and the agent.
 
 **Append or redo?** Both, on purpose. Bronze only ever grows: it keeps every daily snapshot, so you can see what
@@ -76,35 +76,55 @@ And separately, **deploy**: every push to `main` runs the `deploy` workflow. It 
 > Each snapshot holds the whole sheet. For the current state, filter to the newest one:
 > `WHERE snapshot_file = (SELECT max(snapshot_file) FROM workspace.bronze.sheet_rows)`
 
-## Silver: cleaning rules
+## Silver: `transactions`
 
-`silver.transactions` has one row per money movement. `build_silver()` in
-`src/analyst_agent/transform/silver_transactions.py` runs these steps in order; the issue numbers are from the
-project plan.
+Built in PySpark by `build_silver()` (`src/analyst_agent/transform/silver_transactions.py`); the rules it uses
+live in `rules.py`. One row per money movement, rebuilt nightly from the newest snapshot.
 
-| # | Problem in the sheet | What the pipeline does |
+**What the cleaning fixes**
+
+- **Columns:** found by header name, because the layout changes between months.
+- **Dates:** day/month swaps and text dates are fixed, then each date is filled down to the rows below it.
+- **Rows:** `Total` / `Avg` / `Normal` summary rows are dropped.
+- **Money:** each sheet row is split into money in and money out, and every transaction gets a `txn_kind`.
+- **Categories:** typos are fixed by majority vote per item, plus overrides in `rules.py`.
+- **One-offs:** tuition and hall fees are flagged `is_one_off`. They stay in the table, so the agent can still answer questions about them.
+- **Reimbursable:** money I pay for work (club, hall, committee) and the money paid back for it, flagged
+  `is_reimbursable`. Past rows are listed by tab and row in `rules.py` (`REIMBURSABLE_ROWS`); for new ones, type
+  `reimb` in the row's **Note** cell in the sheet.
+- **Adjustments:** a `Correction` row, used when the sheet and the bank disagree, becomes `txn_kind = 'adjustment'`.
+- **Study terms:** year 1 starts in Aug 2025 (class of 2029). Semester 1 is Aug–Dec, semester 2 is Jan–May.
+  Late-July days before semester 1 count as semester 1. Only Singapore spending is tracked.
+- **Not read:** THB, `Remaining` and `Daily Expense` are derived in the sheet, so they're skipped.
+
+**Table structure**
+
+| Column | Type | Meaning |
 |---|---|---|
-| 1 | One tab per month, plus template tabs | Keeps tabs named like `8/25`, reads month and year from the name, skips `EMPTY*` |
-| 2 | Columns move between months (`Payment Method` disappears, `Income` vs `Income(SGD)`) | Finds every column by its header text, not its position. A missing column becomes null |
-| 3 | Date typed only on the first row of each day | Fills each date down to the rows below it |
-| 4 | Day and month swapped (6 Jan stored as 1 Jun), or dates typed as text (`13/1`) | Tries the date as stored and swapped, keeps whichever lands in the tab's month. `date_fix` records what happened |
-| 5 | `Total` / `Avg` / `Normal` rows mixed in with data | Drops rows with no item and no category. A row with a category but no item name is a real purchase and is kept |
-| 6 | Formulas such as `=7.35+15.3` | Reads the computed value |
-| 7 | Balance carried over typed as income | `txn_kind`: `opening_balance`, `income`, `expense`, `refund`, `adjustment`. A row with both an income and an expense (split bill) becomes two transactions |
-| 9 | Wrong categories (a breakfast set filed under Travel) | An item seen 3+ times takes its majority category, then explicit overrides in `rules.py`. `category_raw` keeps the original |
-| 10 | `air con` / `Air-Con` / trailing spaces | `item_clean`: lower case, single spaces. An alias table comes later |
-| 11–12 | One-offs (tuition, hall fees) subtracted by hand in formulas | `is_one_off` from patterns in `rules.py`. `excluded_in_sheet` records what the sheet's formulas subtracted, for comparison only: formulas get copy-pasted between months with stale row numbers |
-| 8, 13 | THB columns, `Remaining`, `Daily Expense` | Not read. They're derived; gold recomputes them |
+| `txn_id` | string | Unique ID (hash of tab, row, direction, item, amount) |
+| `txn_date` | date | Cleaned date |
+| `item_raw` / `item_clean` | string | As typed / lower case, single spaces |
+| `amount_sgd` | double | Always positive |
+| `direction` | string | `in` or `out` |
+| `txn_kind` | string | `expense`, `income`, `opening_balance`, `refund`, `adjustment` |
+| `category` / `category_raw` | string | Cleaned (expenses only) / as typed |
+| `payment_method` | string | Null from Mar 2026 (column removed from the sheet) |
+| `note` | string | Note column |
+| `is_one_off` | boolean | Tuition or hall fee |
+| `is_reimbursable` | boolean | Paid for work and paid back (both legs): listed in `rules.py`, or `reimb` in the Note cell |
+| `excluded_in_sheet` | boolean | The sheet's Total formula subtracted this row (for comparison only) |
+| `study_year` | int | 1 = Aug 2025 to May 2026, 2 = Jul 2026 to May 2027, … |
+| `semester` | int | 1 = Jul/Aug–Dec, 2 = Jan–May |
+| `term` | string | `Y1S1`, `Y1S2`, `Y2S1`, … |
+| `date_fix` | string | How the date was read, e.g. `serial:swapped` |
+| `source_tab` / `source_row` | string / int | The exact sheet row behind each transaction |
+| `snapshot_file` / `loaded_at` | string / timestamp | Which snapshot it came from / when it was built |
 
-**Data tests** run before every write. Errors stop the job and keep the previous table: a missing date, a date
-outside its tab's month (the previous month is allowed, since tabs can start a few days early), an amount ≤ 0, or
-a duplicate `txn_id`. Warnings are printed only: an expense with an unknown category, and categories the
-cleaning changed.
+**Personal living spend** = `txn_kind = 'expense' AND NOT is_one_off AND NOT is_reimbursable`
+(adjustments are their own `txn_kind`, so they're already out).
 
-**Reconciliation:** for every month tab, the silver expenses minus the rows the sheet's formula excludes equal the
-sheet's own `Total` row.
-
-**Lineage:** `source_tab` + `source_row` point at the exact sheet row behind every transaction.
+**Checks:** data tests run before every write. A missing or out-of-month date, an amount ≤ 0, or a duplicate ID
+fails the job, and the previous table is kept. Every month's expenses reconcile with the sheet's own `Total` row.
 
 ## Tools used
 

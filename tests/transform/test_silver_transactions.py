@@ -8,7 +8,8 @@ import json
 
 import pytest
 
-from analyst_agent.transform.silver_transactions import build_silver, data_tests
+from analyst_agent.transform import rules
+from analyst_agent.transform.silver_transactions import build_silver, data_tests, flag_reimbursable
 
 SNAPSHOT = "snapshot_20261019T000000Z.json"
 
@@ -34,6 +35,8 @@ WITH_PAYMENT = ["Date", "List", "Payment Method", "Type", "Income(SGD)", "Expens
                 "Remaining (SGD)", "Remianing (THB)", "Note"]
 NO_PAYMENT = ["Date", "List", "Type", "Income(SGD)", "Expense(SGD)", "Expense(THB)", "Remaining (SGD)"]
 FIRST_TAB = ["Date", "List", "Payment Method", "Type", "Income", "Expense(SGD)", "Expense(THB) (x25.17)"]
+LATEST = ["Date", "List", "Type", "Income(SGD)", "Expense(SGD)", "Expense(THB)", "Remaining (SGD)",
+          "Remianing (THB)", "Note"]
 
 
 @pytest.fixture(scope="module")
@@ -61,7 +64,13 @@ def silver(spark):
         [serial(2025, 7, 24), "Morning set 1", "Cash", "Food", "", 2.5],         # tab starts in July
         [serial(2025, 8, 1), "air con", "Cash", "Air-Con", "", 5],
     ])
-    rows += tab_rows("EMPTY", 3, WITH_PAYMENT, [["", "", "", "", "", "", "", 0]])
+    rows += tab_rows("9/26", 3, LATEST, [
+        [serial(2026, 9, 1), "Start", "*Income*", "", "", 0, 800, 0, ""],
+        ["", "Club snacks", "Others", "", 40, 0, 760, 0, "Reimb"],               # paid for work
+        ["", "Club payback", "*Income*", 40, "", 0, 800, 0, "reimb - club"],     # and got it back
+        ["", "Lunch", "Food", "", 5, 0, 795, 0, "with friends"],
+    ])
+    rows += tab_rows("EMPTY", 4, WITH_PAYMENT, [["", "", "", "", "", "", "", 0]])
 
     schema = ("snapshot_file string, snapshot_ts string, tab string, tab_index int, row_num int, "
               "raw array<string>, formatted array<string>, formula array<string>")
@@ -76,7 +85,7 @@ def get(silver, tab, row, direction="out"):
 
 
 def test_only_month_tabs_and_real_rows(silver):
-    assert {r.source_tab for r in silver.select("source_tab").distinct().collect()} == {"1/26", "2/26", "8/25"}
+    assert {r.source_tab for r in silver.select("source_tab").distinct().collect()} == {"1/26", "2/26", "8/25", "9/26"}
     assert silver.filter("source_row = 8 AND source_tab = '1/26'").count() == 0  # Total row dropped
     unnamed = get(silver, "2/26", 8)                                            # blank item, real purchase
     assert (unnamed.txn_kind, unnamed.amount_sgd, unnamed.is_one_off) == ("expense", 4.0, False)
@@ -132,3 +141,25 @@ def test_data_tests_pass(silver):
     errors = {k: v for k, v in results.items() if v["severity"] == "error" and v["failures"]}
     assert errors == {}
     assert results["category_changed_by_cleaning"]["failures"] == 1
+
+
+def test_reimbursable_from_note(silver):
+    assert get(silver, "9/26", 3).is_reimbursable
+    assert get(silver, "9/26", 4, "in").is_reimbursable
+    assert not get(silver, "9/26", 5).is_reimbursable                    # a note, but not the marker
+    assert not get(silver, "2/26", 3).is_reimbursable                    # tab has no Note column
+
+
+def test_reimbursable_from_row_list(spark, monkeypatch):
+    monkeypatch.setattr(rules, "REIMBURSABLE_ROWS", {"10/25": [7, 25]})
+    df = spark.createDataFrame([("10/25", 7, None), ("10/25", 8, None), ("11/25", 7, None)],
+                               "tab string, row_num int, note string")
+    flags = {(r.tab, r.row_num): r.is_reimbursable for r in flag_reimbursable(df).collect()}
+    assert flags == {("10/25", 7): True, ("10/25", 8): False, ("11/25", 7): False}
+
+
+def test_study_year_and_semester(silver):
+    terms = lambda r: (r.study_year, r.semester, r.term)
+    assert terms(get(silver, "8/25", 2)) == (1, 1, "Y1S1")               # 24 Jul, before semester 1
+    assert terms(get(silver, "1/26", 3)) == (1, 2, "Y1S2")
+    assert terms(get(silver, "9/26", 3)) == (2, 1, "Y2S1")
