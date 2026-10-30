@@ -5,7 +5,7 @@ A personal data platform: my expense tracker (Google Sheets) → Databricks (bro
 Status: **Phase 2 in progress**. Phase 1 is done: `silver.transactions` is cleaned, tested, and its recomputed
 balance matches the sheet (`silver.balance_check`). Gold tables are built (`fact_transaction`, `dim_date`,
 `daily_living_spend`, `monthly_summary`) and monthly living spend reconciles with the sheet's own totals.
-Next: the AI/BI dashboard.
+The AI/BI dashboard **Money in Singapore** reads from gold. Next: Phase 3, the analyst agent.
 
 ## The big picture
 
@@ -202,6 +202,26 @@ the sheet doesn't); in 11/25 a `Total` formula that subtracts 7 ordinary meals (
 another month); in 1/26 a reimbursable S$15.90 the sheet kept; in 9/25 a shared S$9.60 meal the sheet left out
 with no payback recorded; and in 8/26 the sheet leaves out two shared meals in full, where gold counts my share.
 
+## Dashboard: Money in Singapore
+
+A Databricks **AI/BI dashboard** (Dashboards in the left sidebar), deployed by the bundle like the job. It reads
+only from `gold`, on the Serverless Starter Warehouse.
+
+- Headline numbers: living spend and per-day spend for the latest month, per-day spend for the current term
+- Living spend per month (by term), purchases by category, per-day spend by term
+- Living spend per day: gaps are days in Thailand, not S$0
+- Money map (Sankey): spend type (living / tuition & hall / work money) → category
+
+**Where it's defined:** `dashboards/money.lvdash.json` holds every SQL dataset and chart; `resources/money.dashboard.yml`
+deploys it (catalog and schema are set there, so the SQL uses bare table names). To change it, edit it in the
+Databricks UI, then pull your edits back into the repo and commit them:
+
+```powershell
+databricks bundle generate dashboard --resource money --force
+```
+
+A `git push` without that step redeploys the file in the repo and **overwrites** UI edits.
+
 ## Repo layout
 
 Rule of thumb: **logic lives in `src/`, notebooks only read → call → write.** That way the logic can be
@@ -218,6 +238,8 @@ notebooks/
   silver/build_transactions.py       bronze -> silver.transactions + silver.balance_check, via src/ + data tests
   gold/build_gold.py                 silver -> gold tables, via src/ + gold tests
 resources/sheet_pipeline.job.yml     the Databricks job: bronze, then silver, then gold
+resources/money.dashboard.yml        the AI/BI dashboard resource
+dashboards/money.lvdash.json         the dashboard itself: SQL datasets + chart layout
 databricks.yml                       Databricks Asset Bundle: what to deploy (no workspace URL, the repo is public)
 tests/transform/                     pytest on a small fake workbook with the same quirks (no real data)
 setup/                               one-time SQL: creates schemas and the Volume

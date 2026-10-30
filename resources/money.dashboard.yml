@@ -1,0 +1,11 @@
+# AI/BI dashboard on the gold tables. The layout and SQL live in dashboards/money.lvdash.json.
+# After editing it in the Databricks UI, pull the changes back into the repo before committing:
+#   databricks bundle generate dashboard --resource money --force
+resources:
+  dashboards:
+    money:
+      display_name: Money in Singapore
+      file_path: ../dashboards/money.lvdash.json
+      warehouse_id: ${var.warehouse_id}
+      dataset_catalog: ${var.catalog}
+      dataset_schema: gold

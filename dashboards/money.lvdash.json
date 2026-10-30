@@ -1,0 +1,532 @@
+{
+  "datasets": [
+    {
+      "name": "kpis",
+      "displayName": "Headline numbers",
+      "queryLines": [
+        "WITH m AS (SELECT * FROM monthly_summary),\n",
+        "t AS (SELECT term, min(month) AS first_month, sum(living_spend) AS living, sum(tracked_days) AS days FROM m GROUP BY term)\n",
+        "SELECT\n",
+        "  (SELECT living_spend FROM m ORDER BY month DESC LIMIT 1) AS month_living,\n",
+        "  (SELECT avg_daily_living_spend FROM m ORDER BY month DESC LIMIT 1) AS month_per_day,\n",
+        "  (SELECT round(living / days, 2) FROM t ORDER BY first_month DESC LIMIT 1) AS term_per_day\n"
+      ]
+    },
+    {
+      "name": "monthly",
+      "displayName": "Monthly summary",
+      "queryLines": [
+        "SELECT month, term, tracked_days, living_spend, avg_daily_living_spend, one_off_spend,\n",
+        "       reimbursable_paid, funding_received, paybacks_received\n",
+        "FROM monthly_summary\n"
+      ]
+    },
+    {
+      "name": "terms",
+      "displayName": "By term",
+      "queryLines": [
+        "SELECT term, min(month) AS first_month, sum(tracked_days) AS tracked_days,\n",
+        "       round(sum(living_spend), 2) AS living_spend,\n",
+        "       round(sum(living_spend) / sum(tracked_days), 2) AS living_per_day\n",
+        "FROM monthly_summary GROUP BY term\n"
+      ]
+    },
+    {
+      "name": "categories",
+      "displayName": "Purchases by category",
+      "queryLines": [
+        "SELECT month, term, category, round(sum(amount_sgd), 2) AS amount_sgd\n",
+        "FROM fact_transaction WHERE is_living_spend GROUP BY month, term, category\n"
+      ]
+    },
+    {
+      "name": "daily",
+      "displayName": "Daily living spend",
+      "queryLines": [
+        "SELECT date, term, living_spend, purchases FROM daily_living_spend\n"
+      ]
+    },
+    {
+      "name": "money_map",
+      "displayName": "Money map",
+      "queryLines": [
+        "SELECT term,\n",
+        "       CASE WHEN is_one_off THEN 'Tuition & hall'\n",
+        "            WHEN is_reimbursable THEN 'Work money (paid back)'\n",
+        "            ELSE 'Living' END AS spend_type,\n",
+        "       coalesce(category, 'Others') AS category,\n",
+        "       round(sum(amount_sgd), 2) AS amount_sgd\n",
+        "FROM fact_transaction WHERE txn_kind = 'expense' GROUP BY ALL\n"
+      ]
+    }
+  ],
+  "pages": [
+    {
+      "name": "overview",
+      "displayName": "Overview",
+      "pageType": "PAGE_TYPE_CANVAS",
+      "layout": [
+        {
+          "widget": {
+            "name": "intro",
+            "multilineTextboxSpec": {
+              "lines": [
+                "# Money in Singapore\n",
+                "**Living spend** = my own share of everyday spending: purchases minus what friends paid back. Tuition, hall fees and work money (paid back by the club) are kept out. Only days I was in Singapore count. Data: `workspace.gold`, rebuilt every night from the sheet.\n"
+              ]
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 0,
+            "width": 6,
+            "height": 2
+          }
+        },
+        {
+          "widget": {
+            "name": "kpi_month",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "kpis",
+                  "disaggregated": true,
+                  "fields": [
+                    {
+                      "name": "month_living",
+                      "expression": "`month_living`"
+                    }
+                  ]
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "counter",
+              "encodings": {
+                "value": {
+                  "fieldName": "month_living",
+                  "displayName": "Living spend, latest month (S$)"
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Living spend, latest month (S$)",
+                "showDescription": true,
+                "description": "The most recent calendar month in the sheet"
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 2,
+            "width": 2,
+            "height": 3
+          }
+        },
+        {
+          "widget": {
+            "name": "kpi_month_day",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "kpis",
+                  "disaggregated": true,
+                  "fields": [
+                    {
+                      "name": "month_per_day",
+                      "expression": "`month_per_day`"
+                    }
+                  ]
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "counter",
+              "encodings": {
+                "value": {
+                  "fieldName": "month_per_day",
+                  "displayName": "Per day, latest month (S$)"
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Per day, latest month (S$)",
+                "showDescription": true,
+                "description": "Living spend / days in Singapore"
+              }
+            }
+          },
+          "position": {
+            "x": 2,
+            "y": 2,
+            "width": 2,
+            "height": 3
+          }
+        },
+        {
+          "widget": {
+            "name": "kpi_term_day",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "kpis",
+                  "disaggregated": true,
+                  "fields": [
+                    {
+                      "name": "term_per_day",
+                      "expression": "`term_per_day`"
+                    }
+                  ]
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "counter",
+              "encodings": {
+                "value": {
+                  "fieldName": "term_per_day",
+                  "displayName": "Per day, current term (S$)"
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Per day, current term (S$)",
+                "showDescription": true,
+                "description": "Compare with past terms below"
+              }
+            }
+          },
+          "position": {
+            "x": 4,
+            "y": 2,
+            "width": 2,
+            "height": 3
+          }
+        },
+        {
+          "widget": {
+            "name": "monthly_trend",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "monthly",
+                  "disaggregated": false,
+                  "fields": [
+                    {
+                      "name": "month",
+                      "expression": "`month`"
+                    },
+                    {
+                      "name": "term",
+                      "expression": "`term`"
+                    },
+                    {
+                      "name": "sum(living_spend)",
+                      "expression": "SUM(`living_spend`)"
+                    }
+                  ]
+                }
+              }
+            ],
+            "spec": {
+              "version": 3,
+              "widgetType": "bar",
+              "encodings": {
+                "x": {
+                  "fieldName": "month",
+                  "scale": {
+                    "type": "temporal"
+                  },
+                  "displayName": "Month"
+                },
+                "y": {
+                  "fieldName": "sum(living_spend)",
+                  "scale": {
+                    "type": "quantitative"
+                  },
+                  "displayName": "Living spend (S$)"
+                },
+                "color": {
+                  "fieldName": "term",
+                  "scale": {
+                    "type": "categorical"
+                  },
+                  "displayName": "Term"
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Living spend per month",
+                "showDescription": true,
+                "description": "Short months (Jul, May) are partial: I arrive late July and leave early May"
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 5,
+            "width": 6,
+            "height": 6
+          }
+        },
+        {
+          "widget": {
+            "name": "by_category",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "categories",
+                  "disaggregated": false,
+                  "fields": [
+                    {
+                      "name": "month",
+                      "expression": "`month`"
+                    },
+                    {
+                      "name": "category",
+                      "expression": "`category`"
+                    },
+                    {
+                      "name": "sum(amount_sgd)",
+                      "expression": "SUM(`amount_sgd`)"
+                    }
+                  ]
+                }
+              }
+            ],
+            "spec": {
+              "version": 3,
+              "widgetType": "bar",
+              "encodings": {
+                "x": {
+                  "fieldName": "month",
+                  "scale": {
+                    "type": "temporal"
+                  },
+                  "displayName": "Month"
+                },
+                "y": {
+                  "fieldName": "sum(amount_sgd)",
+                  "scale": {
+                    "type": "quantitative"
+                  },
+                  "displayName": "Purchases (S$)"
+                },
+                "color": {
+                  "fieldName": "category",
+                  "scale": {
+                    "type": "categorical"
+                  },
+                  "displayName": "Category"
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Living purchases by category",
+                "showDescription": true,
+                "description": "Before paybacks from friends"
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 11,
+            "width": 3,
+            "height": 7
+          }
+        },
+        {
+          "widget": {
+            "name": "by_term",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "terms",
+                  "disaggregated": false,
+                  "fields": [
+                    {
+                      "name": "term",
+                      "expression": "`term`"
+                    },
+                    {
+                      "name": "sum(living_per_day)",
+                      "expression": "SUM(`living_per_day`)"
+                    }
+                  ]
+                }
+              }
+            ],
+            "spec": {
+              "version": 3,
+              "widgetType": "bar",
+              "encodings": {
+                "x": {
+                  "fieldName": "term",
+                  "scale": {
+                    "type": "categorical"
+                  },
+                  "displayName": "Term"
+                },
+                "y": {
+                  "fieldName": "sum(living_per_day)",
+                  "scale": {
+                    "type": "quantitative"
+                  },
+                  "displayName": "Living spend per day (S$)"
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Living spend per day, by term",
+                "showDescription": true,
+                "description": "Y1S1 = Aug–Dec 2025, Y1S2 = Jan–May 2026, Y2S1 = Aug–Dec 2026"
+              }
+            }
+          },
+          "position": {
+            "x": 3,
+            "y": 11,
+            "width": 3,
+            "height": 7
+          }
+        },
+        {
+          "widget": {
+            "name": "daily",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "daily",
+                  "disaggregated": false,
+                  "fields": [
+                    {
+                      "name": "date",
+                      "expression": "`date`"
+                    },
+                    {
+                      "name": "term",
+                      "expression": "`term`"
+                    },
+                    {
+                      "name": "sum(living_spend)",
+                      "expression": "SUM(`living_spend`)"
+                    }
+                  ]
+                }
+              }
+            ],
+            "spec": {
+              "version": 3,
+              "widgetType": "bar",
+              "encodings": {
+                "x": {
+                  "fieldName": "date",
+                  "scale": {
+                    "type": "temporal"
+                  },
+                  "displayName": "Day"
+                },
+                "y": {
+                  "fieldName": "sum(living_spend)",
+                  "scale": {
+                    "type": "quantitative"
+                  },
+                  "displayName": "Living spend (S$)"
+                },
+                "color": {
+                  "fieldName": "term",
+                  "scale": {
+                    "type": "categorical"
+                  },
+                  "displayName": "Term"
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Living spend per day",
+                "showDescription": true,
+                "description": "Gaps are days in Thailand (no data), not S$0. A day can dip below 0 when a payback lands"
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 18,
+            "width": 6,
+            "height": 6
+          }
+        },
+        {
+          "widget": {
+            "name": "money_map",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "money_map",
+                  "disaggregated": false,
+                  "fields": [
+                    {
+                      "name": "spend_type",
+                      "expression": "`spend_type`"
+                    },
+                    {
+                      "name": "category",
+                      "expression": "`category`"
+                    },
+                    {
+                      "name": "sum(amount_sgd)",
+                      "expression": "SUM(`amount_sgd`)"
+                    }
+                  ]
+                }
+              }
+            ],
+            "spec": {
+              "version": 1,
+              "widgetType": "sankey",
+              "encodings": {
+                "value": {
+                  "fieldName": "sum(amount_sgd)",
+                  "displayName": "S$"
+                },
+                "stages": [
+                  {
+                    "fieldName": "spend_type",
+                    "displayName": "Type"
+                  },
+                  {
+                    "fieldName": "category",
+                    "displayName": "Category"
+                  }
+                ]
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Money map: where every dollar went",
+                "showDescription": true,
+                "description": "All spending, including tuition, hall and work money"
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 24,
+            "width": 6,
+            "height": 8
+          }
+        }
+      ]
+    }
+  ]
+}

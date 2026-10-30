@@ -14,6 +14,10 @@ variables:
   catalog:
     description: Unity Catalog catalog that holds the bronze/silver/gold schemas
     default: workspace   # Free Edition's default catalog; change if yours is named differently
+  warehouse_id:
+    description: SQL warehouse the dashboard runs its queries on (looked up by name, so no ID in the repo)
+    lookup:
+      warehouse: Serverless Starter Warehouse
 
 targets:
   dev:
