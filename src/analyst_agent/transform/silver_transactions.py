@@ -156,10 +156,11 @@ def to_transactions(df: DataFrame) -> DataFrame:
     # blank item is a real purchase whose name was never typed, so it stays.
     has_category = F.col("category").isin(*rules.EXPENSE_CATEGORIES, rules.INCOME_CATEGORY)
     rows = df.filter(F.col("item").isNotNull() | has_category)
+    rows = rows.withColumn("is_first_row", F.col("row_num") == F.min("row_num").over(Window.partitionBy("tab")))
     income, expense, remaining = try_double("income"), try_double("expense"), try_double("remaining")
 
-    is_opening = F.col("item_clean").rlike(rules.OPENING_BALANCE_PATTERN)
     is_income_cat = F.col("category") == rules.INCOME_CATEGORY
+    is_opening = (F.col("is_first_row") & is_income_cat) | F.col("item_clean").rlike(rules.OPENING_BALANCE_PATTERN)
     opening_amount = F.coalesce(F.when(income > 0, income), remaining)
 
     legs = F.when(

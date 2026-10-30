@@ -24,7 +24,9 @@ HEADER_ALIASES = {
 # The sheet's marker for money coming in.
 INCOME_CATEGORY = "*Income*"
 
-# Balance carried over from the previous month (issue 7). Not real income.
+# Balance carried over from the previous month (issue 7). Not real income. The first row of a tab is always
+# its starting money when it's money in, whatever it's called ("Start", "Monthly Start", "Monthly Income",
+# "Income"). This pattern catches the rest, e.g. "Remaining Bank Note" (cash on hand) on the second row.
 OPENING_BALANCE_PATTERN = r"^(start|remaining|monthly start)\b"
 
 # Money coming back for something already paid.

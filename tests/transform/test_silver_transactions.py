@@ -71,7 +71,12 @@ def silver(spark):
         ["", "Club payback", "*Income*", 40, "", 0, 800, 0, "reimb - club"],     # and got it back
         ["", "Lunch", "Food", "", 5, 0, 795, 0, "with friends"],
     ])
-    rows += tab_rows("EMPTY", 4, WITH_PAYMENT, [["", "", "", "", "", "", "", 0]])
+    rows += tab_rows("10/25", 4, WITH_PAYMENT, [
+        [serial(2025, 10, 5), "Monthly Income", "Bank", "*Income*", 1500, 0, 0, 1500],  # top row = starting money
+        ["", "Lunch", "Bank", "Food", "", 5, 0, 1495],
+        ["", "Monthly income", "Bank", "*Income*", 700, "", 0, 2195],              # further down = real income
+    ])
+    rows += tab_rows("EMPTY", 5, WITH_PAYMENT, [["", "", "", "", "", "", "", 0]])
 
     schema = ("snapshot_file string, snapshot_ts string, tab string, tab_index int, row_num int, "
               "raw array<string>, formatted array<string>, formula array<string>")
@@ -86,7 +91,7 @@ def get(silver, tab, row, direction="out"):
 
 
 def test_only_month_tabs_and_real_rows(silver):
-    assert {r.source_tab for r in silver.select("source_tab").distinct().collect()} == {"1/26", "2/26", "8/25", "9/26"}
+    assert {r.source_tab for r in silver.select("source_tab").distinct().collect()} == {"1/26", "2/26", "8/25", "9/26", "10/25"}
     assert silver.filter("source_row = 8 AND source_tab = '1/26'").count() == 0  # Total row dropped
     unnamed = get(silver, "2/26", 8)                                            # blank item, real purchase
     assert (unnamed.txn_kind, unnamed.amount_sgd, unnamed.is_one_off) == ("expense", 4.0, False)
@@ -116,6 +121,9 @@ def test_transaction_kinds(silver):
     assert get(silver, "2/26", 6, "in").txn_kind == "income"
     assert get(silver, "2/26", 7, "in").txn_kind == "refund"
     assert get(silver, "1/26", 7).txn_kind == "adjustment"
+    assert get(silver, "10/25", 2, "in").txn_kind == "opening_balance"    # first row, whatever its name
+    assert get(silver, "10/25", 4, "in").txn_kind == "income"             # same name, not the first row
+    assert get(silver, "8/25", 2).txn_kind == "expense"                   # first row, but money out
 
 
 def test_split_bill_becomes_two_transactions(silver):
