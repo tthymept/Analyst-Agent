@@ -17,10 +17,11 @@ src_path = dbutils.widgets.get("src_path")
 if src_path and src_path not in sys.path:
     sys.path.insert(0, src_path)  # the bundle uploads the repo's src/ folder next to this notebook
 
-from analyst_agent.transform.silver_transactions import build_silver, data_tests
+from analyst_agent.transform.silver_transactions import balance_check, build_silver, data_tests
 
 source = f"{catalog}.bronze.sheet_rows"
 target = f"{catalog}.silver.transactions"
+balance_target = f"{catalog}.silver.balance_check"
 
 # COMMAND ----------
 
@@ -40,6 +41,19 @@ if errors:
     .option("comment", "One row per money movement, cleaned from the newest sheet snapshot. See README.")
     .saveAsTable(target))
 print(f"Wrote {silver.count()} transactions to {target}")
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC Phase 1 gate: each tab's recomputed closing balance vs the sheet's `Remaining`. Every gap should be a
+# MAGIC known sheet formula error listed in `rules.KNOWN_BALANCE_DRIFT`; `explained = false` means a new one.
+
+# COMMAND ----------
+
+(balance_check(spark.table(target)).write.mode("overwrite").option("overwriteSchema", "true")
+    .option("comment", "Recomputed vs sheet closing balance per tab. See rules.KNOWN_BALANCE_DRIFT.")
+    .saveAsTable(balance_target))
+display(spark.table(balance_target).orderBy("source_tab"))
 
 # COMMAND ----------
 

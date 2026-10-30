@@ -263,6 +263,7 @@ def build_silver(bronze: DataFrame) -> DataFrame:
         "category",
         "category_raw",
         F.round("amount_sgd", 2).alias("amount_sgd"),
+        F.round(try_double("remaining"), 2).alias("sheet_balance"),
         "direction",
         "txn_kind",
         "payment_method",
@@ -278,6 +279,46 @@ def build_silver(bronze: DataFrame) -> DataFrame:
         F.col("row_num").alias("source_row"),
         "snapshot_file",
         F.current_timestamp().alias("loaded_at"),
+    )
+
+
+# ---------------------------------------------------------------------------- balance check
+
+def balance_check(silver: DataFrame) -> DataFrame:
+    """Phase 1 gate: recompute each tab's closing balance from its transactions and compare it with the
+    sheet's own Remaining column. One row per tab.
+
+    The opening balance is taken from the tab's first row (its sheet balance minus that row's own money),
+    so tabs that start with a "Start" row and tabs that don't are handled the same way. Tabs without a
+    Remaining column (8/25) get no check.
+    """
+    signed = F.when(F.col("direction") == "in", F.col("amount_sgd")).otherwise(-F.col("amount_sgd"))
+    rows = silver.groupBy("source_tab", "source_row").agg(
+        F.sum(signed).alias("row_net"), F.first("sheet_balance", ignorenulls=True).alias("sheet_balance"))
+    running = Window.partitionBy("source_tab").orderBy("source_row").rowsBetween(Window.unboundedPreceding, 0)
+    rows = rows.withColumn("running_net", F.sum("row_net").over(running))
+
+    tabs = rows.groupBy("source_tab").agg(
+        F.min_by(F.col("sheet_balance") - F.col("row_net"), "source_row").alias("opening"),
+        # close at the last row the sheet has a balance for, so trailing rows without one don't count
+        F.max_by(F.struct("running_net", "sheet_balance"),
+                 F.when(F.col("sheet_balance").isNotNull(), F.col("source_row"))).alias("last"),
+    )
+    known = [(tab, float(drift), reason) for tab, (drift, reason) in rules.KNOWN_BALANCE_DRIFT.items()]
+    known_df = silver.sparkSession.createDataFrame(known, "source_tab string, known_drift double, known_reason string")
+
+    drift = F.round(F.col("sheet_close") - F.col("recomputed_close"), 2)
+    explained = F.abs(F.col("drift") - F.coalesce("known_drift", F.lit(0.0))) <= rules.BALANCE_TOLERANCE
+    return (
+        tabs.select(
+            "source_tab",
+            F.round("opening", 2).alias("opening"),
+            F.round(F.col("opening") + F.col("last.running_net"), 2).alias("recomputed_close"),
+            F.col("last.sheet_balance").alias("sheet_close"),
+        )
+        .withColumn("drift", drift)
+        .join(known_df, "source_tab", "left")
+        .withColumn("explained", F.when(F.col("drift").isNotNull(), explained))
     )
 
 
@@ -302,6 +343,8 @@ def data_tests(silver: DataFrame) -> dict[str, dict]:
         *[F.sum(F.when(cond, 1).otherwise(0)).alias(name) for name, (_, cond) in checks.items()],
         (F.count("*") - F.countDistinct("txn_id")).alias("txn_id_duplicated"),
     ).first().asDict()
+    counts["balance_unexplained"] = balance_check(silver).filter(F.col("explained") == False).count()  # noqa: E712
 
-    severities = {name: sev for name, (sev, _) in checks.items()} | {"txn_id_duplicated": "error"}
+    severities = {name: sev for name, (sev, _) in checks.items()} | {"txn_id_duplicated": "error",
+                                                                     "balance_unexplained": "warn"}
     return {name: {"severity": severities[name], "failures": int(counts[name] or 0)} for name in severities}

@@ -110,6 +110,7 @@ live in `rules.py`. One row per money movement, rebuilt nightly from the newest 
 | `txn_date` | date | Cleaned date |
 | `item_raw` / `item_clean` | string | As typed / lower case, single spaces |
 | `amount_sgd` | double | Always positive |
+| `sheet_balance` | double | The sheet's own `Remaining` after this row (null in 8/25, which has none) |
 | `direction` | string | `in` or `out` |
 | `txn_kind` | string | `expense`, `income`, `opening_balance`, `refund`, `adjustment` |
 | `category` / `category_raw` | string | Cleaned (expenses only) / as typed |
@@ -132,6 +133,12 @@ live in `rules.py`. One row per money movement, rebuilt nightly from the newest 
 fails the job, and the previous table is kept. Warnings are printed but don't stop the job: an expense with an
 unknown category, a category changed by cleaning, or a date outside any semester (June). Every month's expenses
 reconcile with the sheet's own `Total` row.
+
+**Balance check (phase 1 gate):** `silver.balance_check` has one row per month tab. It recomputes the closing
+balance from the transactions and compares it with the sheet's `Remaining`. Every gap so far is a sheet formula
+error (a row that never subtracts its expense, or skips the row above), listed with its reason in
+`rules.KNOWN_BALANCE_DRIFT`. A new or changed gap shows up as `explained = false` and a `balance_unexplained`
+warning. Some `Correction` rows exist only to patch these formula errors, so the sheet matched the bank.
 
 **Where the flags came from:** before this pipeline, I cleaned the sheet by hand in `Money Tracker Data.xlsx`
 (kept locally, never committed) and linked it to Power BI. Its `Is_Reimbursable`, `Is_Adjustment`, `Year` and

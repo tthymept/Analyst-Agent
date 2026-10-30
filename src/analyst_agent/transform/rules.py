@@ -55,6 +55,19 @@ ONE_OFF_PATTERNS = [
     r"^hall fee",
 ]
 
+# Balance check (phase 1 gate): each tab's closing balance is recomputed from the transactions and compared
+# with the sheet's own Remaining column. Gaps below are sheet formula errors that were found and explained
+# (sheet minus recomputed, S$). A gap that isn't listed, or doesn't match, fails the check.
+BALANCE_TOLERANCE = 0.01
+KNOWN_BALANCE_DRIFT = {
+    "9/25": (-69.30, "row 3 never adds the S$66.80 cash (=H2); row 32 subtracts F33 instead of F32"),
+    "10/25": (26.88, "rows 60-61 never subtract the expense (=H59+E60)"),
+    "11/25": (11.25, "rows 60-61 never subtract the expense; the 20 Nov Correction (S$11.25) patches it"),
+    "1/26": (19.63, "row 22 starts from row 20, skipping row 21; row 88 copies row 87 (=H87)"),
+    "5/26": (2.50, "row 22 starts from row 20, skipping row 21; the 8 May Correction (S$2.50) patches it"),
+    "8/26": (28.22, "rows 74 and 110 copy the row above; rows 78 and 111 ignore their income"),
+}
+
 # Study year and semester. Year 1 starts in Aug 2025 (class of 2029). Only Singapore spending is tracked;
 # the rest of the year is spent in Thailand. July counts as semester 1, because I fly back a few days
 # before it starts (24 Jul 2025, 27 Jul 2026) and those days sit in the August tab or a short July tab.

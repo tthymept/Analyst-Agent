@@ -9,7 +9,8 @@ import json
 import pytest
 
 from analyst_agent.transform import rules
-from analyst_agent.transform.silver_transactions import build_silver, data_tests, flag_reimbursable
+from analyst_agent.transform.silver_transactions import (balance_check, build_silver, data_tests,
+                                                          flag_reimbursable)
 
 SNAPSHOT = "snapshot_20261019T000000Z.json"
 
@@ -163,3 +164,35 @@ def test_study_year_and_semester(silver):
     assert terms(get(silver, "8/25", 2)) == (1, 1, "Y1S1")               # 24 Jul, before semester 1
     assert terms(get(silver, "1/26", 3)) == (1, 2, "Y1S2")
     assert terms(get(silver, "9/26", 3)) == (2, 1, "Y2S1")
+
+
+def test_sheet_balance_kept(silver):
+    assert get(silver, "1/26", 2, "in").sheet_balance == 500
+    assert get(silver, "9/26", 3).sheet_balance == 760
+
+
+SILVER_ROWS = "source_tab string, source_row int, direction string, amount_sgd double, sheet_balance double"
+
+
+def test_balance_check(spark, monkeypatch):
+    monkeypatch.setattr(rules, "KNOWN_BALANCE_DRIFT", {"9/26": (5.0, "row 5 never subtracts its expense")})
+    silver = spark.createDataFrame([
+        ("9/26", 2, "in", 800.0, 800.0),     # Start row
+        ("9/26", 3, "out", 40.0, 760.0),
+        ("9/26", 4, "in", 40.0, 800.0),
+        ("9/26", 5, "out", 5.0, 800.0),      # sheet formula forgot this expense
+        ("9/26", 6, "out", 1.0, None),       # trailing row with no balance: not compared
+        ("2/26", 2, "out", 2.5, 2866.21),    # no Start row: opening comes from the first row
+        ("2/26", 3, "out", 1.0, 2865.21),
+        ("2/26", 4, "in", 3.0, 2868.21),
+        ("8/25", 2, "out", 5.0, None),       # no Remaining column at all
+    ], SILVER_ROWS)
+    tabs = {r.source_tab: r for r in balance_check(silver).collect()}
+
+    assert (tabs["9/26"].opening, tabs["9/26"].recomputed_close, tabs["9/26"].sheet_close) == (0.0, 795.0, 800.0)
+    assert (tabs["9/26"].drift, tabs["9/26"].explained) == (5.0, True)
+    assert (tabs["2/26"].opening, tabs["2/26"].drift, tabs["2/26"].explained) == (2868.71, 0.0, True)
+    assert tabs["8/25"].drift is None and tabs["8/25"].explained is None
+
+    monkeypatch.setattr(rules, "KNOWN_BALANCE_DRIFT", {})
+    assert balance_check(silver).filter("explained = false").count() == 1
