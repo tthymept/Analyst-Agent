@@ -182,8 +182,9 @@ def to_transactions(df: DataFrame) -> DataFrame:
         .when(F.col("item_clean").rlike(rules.ADJUSTMENT_PATTERN), "adjustment")
         .when((F.col("direction") == "out"), "expense")
         .when(F.col("item_clean").rlike(rules.REFUND_PATTERN), "refund")
-        .when(is_income_cat, "income")
-        .otherwise("refund")  # money in on an expense row: someone paying back their share
+        .when(F.col("item_clean").rlike(rules.FUNDING_PATTERN), "funding")
+        .when(F.col("item_clean").rlike(rules.INCOME_PATTERN), "income")
+        .otherwise("refund")  # any other money in: someone paying back their share
     )
     return txns.withColumn("txn_kind", kind)
 
@@ -216,9 +217,12 @@ def fix_categories(df: DataFrame) -> DataFrame:
 def flag_one_offs(df: DataFrame, exclusions: DataFrame) -> DataFrame:
     """Issues 11, 12: `is_one_off` from explicit rules; `excluded_in_sheet` from the sheet's formulas."""
     pattern = "|".join(f"({p})" for p in rules.ONE_OFF_PATTERNS)
+    one_off = F.coalesce(F.col("item_clean").rlike(pattern), F.lit(False))
+    for tab, rows in rules.ONE_OFF_ROWS.items():
+        one_off = one_off | ((F.col("tab") == tab) & F.col("row_num").isin(rows))
     flagged = exclusions.withColumn("excluded_in_sheet", F.lit(True))
     return (
-        df.withColumn("is_one_off", F.coalesce(F.col("item_clean").rlike(pattern), F.lit(False)))
+        df.withColumn("is_one_off", one_off)
         .join(flagged, ["tab", "row_num"], "left")
         .withColumn("excluded_in_sheet", F.coalesce("excluded_in_sheet", F.lit(False)))
     )

@@ -29,8 +29,18 @@ INCOME_CATEGORY = "*Income*"
 # "Income"). This pattern catches the rest, e.g. "Remaining Bank Note" (cash on hand) on the second row.
 OPENING_BALANCE_PATTERN = r"^(start|remaining|monthly start)\b"
 
-# Money coming back for something already paid.
-REFUND_PATTERN = r"reimburse|refund|cash ?back"
+# Money coming back for something already paid ("reimbur" also catches the typo "Reimburement").
+REFUND_PATTERN = r"reimbur|refund"
+
+# Money from family: allowance, tuition and hall money. Not earned income, and not personal spending money
+# when it pays tuition or hall fees, so it gets its own txn_kind.
+FUNDING_PATTERN = r"\bmom\b|\bfam\b|^(monthly )?income$|tuition|^hall fee"
+
+# Money that's mine to keep: interest, cashback, small gifts ("X give"), pay. It doesn't reduce living spend.
+# Any other money in (a friend paying back their share of a meal or a Grab ride) is a `refund`, and gold
+# subtracts it from living spend, so living spend is my own share. Add a word here if a new kind of money
+# to keep shows up, or it will be counted as a payback.
+INCOME_PATTERN = r"interest|cash ?back|\bgive\b|\bgift\b|salary|wage"
 
 # Manual fixes to the running balance: one "Correction" row whenever the sheet and the bank disagree.
 ADJUSTMENT_PATTERN = r"^correction"
@@ -56,6 +66,10 @@ ONE_OFF_PATTERNS = [
     r"tuition",
     r"^hall fee",
 ]
+# One-offs whose name doesn't say so, by tab and sheet row.
+ONE_OFF_ROWS = {
+    "3/26": [28],  # "Income" S$10,000 on 5 Mar 2026: money for the tuition fee paid on 18 Mar
+}
 
 # Balance check (phase 1 gate): each tab's closing balance is recomputed from the transactions and compared
 # with the sheet's own Remaining column. Gaps below are sheet formula errors that were found and explained
@@ -74,6 +88,9 @@ KNOWN_BALANCE_DRIFT = {
 # the rest of the year is spent in Thailand. July counts as semester 1, because I fly back a few days
 # before it starts (24 Jul 2025, 27 Jul 2026) and those days sit in the August tab or a short July tab.
 FIRST_STUDY_YEAR = 2025
+# gold.dim_date covers the whole degree: the arrival week in Jul 2025 to the end of year 4 (May 2029).
+CALENDAR_START = "2025-07-01"
+CALENDAR_END = "2029-05-31"
 SEMESTER_1_MONTHS = [7, 8, 9, 10, 11, 12]
 SEMESTER_2_MONTHS = [1, 2, 3, 4, 5]
 

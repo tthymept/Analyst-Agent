@@ -74,7 +74,7 @@ def silver(spark):
     rows += tab_rows("10/25", 4, WITH_PAYMENT, [
         [serial(2025, 10, 5), "Monthly Income", "Bank", "*Income*", 1500, 0, 0, 1500],  # top row = starting money
         ["", "Lunch", "Bank", "Food", "", 5, 0, 1495],
-        ["", "Monthly income", "Bank", "*Income*", 700, "", 0, 2195],              # further down = real income
+        ["", "Monthly income", "Bank", "*Income*", 700, "", 0, 2195],              # further down = family money
     ])
     rows += tab_rows("EMPTY", 5, WITH_PAYMENT, [["", "", "", "", "", "", "", 0]])
 
@@ -119,10 +119,11 @@ def test_transaction_kinds(silver):
     assert get(silver, "1/26", 2, "in").amount_sgd == 500
     assert get(silver, "2/26", 2, "in").amount_sgd == 1200               # amount taken from Remaining
     assert get(silver, "2/26", 6, "in").txn_kind == "income"
-    assert get(silver, "2/26", 7, "in").txn_kind == "refund"
+    assert get(silver, "2/26", 7, "in").txn_kind == "income"              # cashback: money to keep, not a payback
     assert get(silver, "1/26", 7).txn_kind == "adjustment"
     assert get(silver, "10/25", 2, "in").txn_kind == "opening_balance"    # first row, whatever its name
-    assert get(silver, "10/25", 4, "in").txn_kind == "income"             # same name, not the first row
+    assert get(silver, "10/25", 4, "in").txn_kind == "funding"            # same name, not the first row
+    assert get(silver, "2/26", 6, "in").txn_kind == "income"              # interest stays income
     assert get(silver, "8/25", 2).txn_kind == "expense"                   # first row, but money out
 
 

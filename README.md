@@ -2,9 +2,10 @@
 
 A personal data platform: my expense tracker (Google Sheets) → Databricks (bronze / silver / gold) → dashboard → an LLM data-analyst agent that answers questions in plain English.
 
-Status: **Phase 1 in progress**: `silver.transactions` is built and reconciles with the sheet's own totals. It now
-also carries the flags from my old Power BI workbook (reimbursable rows, study year and semester), so the gold
-tables and the agent can separate personal living spend from work money and one-off fees. Next: gold tables and the dashboard.
+Status: **Phase 2 in progress**. Phase 1 is done: `silver.transactions` is cleaned, tested, and its recomputed
+balance matches the sheet (`silver.balance_check`). Gold tables are built (`fact_transaction`, `dim_date`,
+`daily_living_spend`, `monthly_summary`) and monthly living spend reconciles with the sheet's own totals.
+Next: the AI/BI dashboard.
 
 ## The big picture
 
@@ -65,7 +66,8 @@ Every night at 02:00 Singapore time:
 4. **Clean (silver, full rebuild).** The second task (`notebooks/silver/build_transactions.py`) rebuilds
    `workspace.silver.transactions` from scratch from the **newest** snapshot, runs data tests, and only overwrites
    the table if they pass. See [Silver: `transactions`](#silver-transactions).
-5. **Gold** (next): metrics for the dashboard and the agent.
+5. **Gold (full rebuild).** The third task (`notebooks/gold/build_gold.py`) rebuilds the gold tables from silver,
+   checks they agree with each other, and only then overwrites them. See [Gold](#gold-metrics-for-the-dashboard-and-the-agent).
 
 **Append or redo?** Both, on purpose. Bronze only ever grows: it keeps every daily snapshot, so you can see what
 the sheet looked like on any day, even after you edit old rows. Silver is thrown away and rebuilt each night from
@@ -112,7 +114,7 @@ live in `rules.py`. One row per money movement, rebuilt nightly from the newest 
 | `amount_sgd` | double | Always positive |
 | `sheet_balance` | double | The sheet's own `Remaining` after this row (null in 8/25, which has none) |
 | `direction` | string | `in` or `out` |
-| `txn_kind` | string | `expense`, `income`, `opening_balance`, `refund`, `adjustment` |
+| `txn_kind` | string | `expense`, `income`, `funding`, `opening_balance`, `refund`, `adjustment` |
 | `category` / `category_raw` | string | Cleaned (expenses only) / as typed |
 | `payment_method` | string | Null from Mar 2026 (column removed from the sheet) |
 | `note` | string | Note column |
@@ -126,8 +128,19 @@ live in `rules.py`. One row per money movement, rebuilt nightly from the newest 
 | `source_tab` / `source_row` | string / int | The exact sheet row behind each transaction |
 | `snapshot_file` / `loaded_at` | string / timestamp | Which snapshot it came from / when it was built |
 
-**Personal living spend** = `txn_kind = 'expense' AND NOT is_one_off AND NOT is_reimbursable`
-(adjustments are their own `txn_kind`, so they're already out).
+**Money in, by `txn_kind`:**
+
+| `txn_kind` | What it is | Examples |
+|---|---|---|
+| `opening_balance` | Money carried over at the start of a tab: the tab's first money-in row, whatever it's called | `Start`, `Monthly Start`, `Monthly Income` at the top |
+| `funding` | Money from family: allowance, tuition and hall money (`rules.FUNDING_PATTERN`) | `Mom`, `Monthly income` mid-month, `Tuition fee income` |
+| `refund` | Money back: work reimbursements, friends paying back their share | `CNY Reimbursement`, `Mookata THB` |
+| `income` | Money to keep (`rules.INCOME_PATTERN`): interest, cashback, small gifts, pay | `Interest earned`, `Cash back` |
+
+**Personal living spend** = my own share of everyday spending: expenses that aren't one-offs or reimbursable,
+**minus paybacks** (refunds that aren't work money: friends paying back their share). Cashback and small gifts
+are income and don't reduce it. Adjustments are
+their own `txn_kind`, so they're already out. Gold stores it per row as `living_amount` (+ purchase, − payback).
 
 **Checks:** data tests run before every write. A missing or out-of-month date, an amount ≤ 0, or a duplicate ID
 fails the job, and the previous table is kept. Warnings are printed but don't stop the job: an expense with an
@@ -163,6 +176,32 @@ Everything here is free: GitHub Actions is free for public repos, Databricks Fre
 and the Google Sheets API has no charge. The Google Cloud project has **no billing account**, so it can't be charged.
 If Google ever asks you to enable billing or start a free trial, say no.
 
+## Gold: metrics for the dashboard and the agent
+
+Built by `src/analyst_agent/transform/gold.py` from `silver.transactions`, rebuilt nightly. The dashboard and the
+agent read only from gold. Months are **calendar months** of `txn_date`, not sheet tabs: the 8/25 tab starts on
+24 Jul, and the sheet's own August total leaves those days out too.
+
+| Table | One row per | What's in it |
+|---|---|---|
+| `gold.fact_transaction` | money movement | Silver, plus `month`, `is_living_spend`, `is_payback` and `living_amount` |
+| `gold.dim_date` | day, 1 Jul 2025 to 31 May 2029 | `study_year`, `semester`, `term`, weekday, and `is_tracked` |
+| `gold.daily_living_spend` | tracked day | Living spend, S$0 on days with no purchases (below 0 on a day a payback lands with nothing bought) |
+| `gold.monthly_summary` | month with tracked days | Living spend (= purchases − paybacks) and its daily average; one-offs; reimbursable paid and received; adjustments; funding and income received |
+
+**`is_tracked`** is true on days I was in Singapore and logging: between the first and last date of a month tab.
+It tells "spent S$0" (tracked) apart from "no data" (in Thailand), so `avg_daily_living_spend` divides by real days.
+
+**Checks:** the three tables must agree on total living spend, and no transaction may fall on an untracked day.
+If not, the job fails and the previous gold tables are kept.
+
+**Phase 2 gate: living spend vs the sheet's totals** (29 Oct snapshot). The sheet has no consistent `Normal` row;
+each tab's `Total` formula subtracts rows by hand, and it counts purchases, not paybacks. Every monthly gap is
+explained: `Correction` rows (the sheet counts them, living spend doesn't); paybacks (living spend nets them,
+the sheet doesn't); in 11/25 a `Total` formula that subtracts 7 ordinary meals (stale row numbers copied from
+another month); in 1/26 a reimbursable S$15.90 the sheet kept; in 9/25 a shared S$9.60 meal the sheet left out
+with no payback recorded; and in 8/26 the sheet leaves out two shared meals in full, where gold counts my share.
+
 ## Repo layout
 
 Rule of thumb: **logic lives in `src/`, notebooks only read → call → write.** That way the logic can be
@@ -172,11 +211,13 @@ tested on a laptop, and the notebooks stay short.
 src/analyst_agent/
   ingest/pull_sheet.py               Google Sheet -> JSON snapshot in the Volume       (runs on GitHub)
   transform/silver_transactions.py   bronze -> silver cleaning, one function per step  (runs on Databricks)
+  transform/gold.py                  silver -> gold tables and metric definitions      (runs on Databricks)
   transform/rules.py                 the business rules: patterns, categories, one-offs. Edit this file first
 notebooks/
   bronze/load_snapshots.py           snapshot JSON -> bronze.sheet_rows
-  silver/build_transactions.py       bronze -> silver.transactions, via src/ + data tests
-resources/sheet_pipeline.job.yml     the Databricks job: bronze task, then silver task
+  silver/build_transactions.py       bronze -> silver.transactions + silver.balance_check, via src/ + data tests
+  gold/build_gold.py                 silver -> gold tables, via src/ + gold tests
+resources/sheet_pipeline.job.yml     the Databricks job: bronze, then silver, then gold
 databricks.yml                       Databricks Asset Bundle: what to deploy (no workspace URL, the repo is public)
 tests/transform/                     pytest on a small fake workbook with the same quirks (no real data)
 setup/                               one-time SQL: creates schemas and the Volume
