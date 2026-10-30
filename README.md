@@ -8,6 +8,9 @@ balance matches the sheet (`silver.balance_check`). Gold tables are built (`fact
 The AI/BI dashboard **Money in Singapore** reads from gold. **Phase 3 in progress:** a first version of the
 analyst agent answers questions from the terminal. Next: the golden question set, to measure it.
 
+**Docs:** the full plan is `docs/analyst-agent-project-plan.md`; each phase has a short overview
+(`docs/phase N/phase-N-core.md`) and a step-by-step build log (`docs/phase N/phase-N-build-log.md`).
+
 ## The big picture
 
 Four platforms, each with one job. GitHub is the hub that connects the other three.
