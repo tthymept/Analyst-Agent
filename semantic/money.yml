@@ -1,0 +1,122 @@
+# Semantic layer for the money dataset: what the agent reads before it writes SQL.
+# Everything here is about meaning. The numbers always come from the warehouse, never from this file.
+name: money
+title: Personal spending in Singapore
+description: >
+  Every money movement I logged while studying in Singapore (class of 2029), cleaned from my Google Sheet
+  and rebuilt every night. Amounts are in Singapore dollars (S$). Only Singapore spending is tracked: I am
+  in Thailand in June, December and most of July, and those days have no data at all.
+catalog: workspace
+schema: gold
+
+rules:
+  - Living spend is the default meaning of "spending", "spent", "expenses" and "cost of living". Use the
+    living_spend columns or `living_amount`, never a plain SUM(amount_sgd), which adds up tuition, opening
+    balances and money coming in.
+  - Living spend is my own share of everyday spending. It leaves out tuition and hall fees (is_one_off),
+    work money paid for a club or hall and paid back (is_reimbursable), Correction rows (txn_kind
+    'adjustment'), and it subtracts what friends paid back (is_payback).
+  - Tuition, hall fees and work money are still in the data. Answer questions about them when asked, from
+    fact_transaction with is_one_off or is_reimbursable.
+  - A month or day with no data is not S$0. Days I was in Singapore have dim_date.is_tracked = true. If the
+    asked period has no tracked days, say there is no data for it.
+  - Per-day averages divide by tracked days (monthly_summary.tracked_days or dim_date.is_tracked), never by
+    calendar days.
+  - Terms are named Y<study year>S<semester>. Semester 1 = Aug–Dec (late-July arrival days count as
+    semester 1), semester 2 = Jan–May. Year 1 = Aug 2025 to May 2026, year 2 = Aug 2026 to May 2027.
+  - Item names are free text with typos and different spellings ("Morning set 1", "morning Set 1 "). Match
+    items with item_clean (lower case, single spaces) and LIKE, and say which spellings you matched.
+  - Months are calendar months of the transaction date, not sheet tabs.
+
+tables:
+  monthly_summary:
+    description: One row per calendar month with at least one tracked day. Start here for monthly and term totals.
+    columns:
+      month: First day of the month (DATE).
+      term: Y1S1, Y1S2, Y2S1, ...
+      study_year: 1, 2, 3, 4.
+      semester: 1 (Aug–Dec) or 2 (Jan–May).
+      tracked_days: Days I was in Singapore that month.
+      living_spend: Living spend (S$) = living_purchases_total - paybacks_received.
+      avg_daily_living_spend: living_spend / tracked_days.
+      living_purchases_total: Everyday purchases before friends paid back (S$).
+      living_purchases: Number of everyday purchases.
+      paybacks_received: Money friends paid back for shared spending (S$).
+      one_off_spend: Tuition and hall fees paid (S$).
+      reimbursable_paid: Work money I paid out for a club or hall (S$).
+      reimbursable_received: Work money paid back to me (S$).
+      adjustments: Correction rows that fixed the sheet's balance (S$). Not spending.
+      funding_received: "Money from family: allowance, tuition and hall money (S$)."
+      income_received: Interest, cashback, small gifts (S$).
+
+  daily_living_spend:
+    description: One row per tracked day, S$0 on days I bought nothing. Untracked days have no row.
+    columns:
+      date: The day.
+      month: First day of its month.
+      day_of_week: Monday ... Sunday.
+      is_weekend: Saturday or Sunday.
+      term: Y1S1, ...
+      living_spend: Living spend that day (S$). Can be below 0 on a day a friend paid me back and I bought nothing.
+      purchases: Number of everyday purchases that day.
+
+  fact_transaction:
+    description: One row per money movement. Use it for items, categories, and anything not in the summaries.
+    columns:
+      txn_date: Date of the transaction.
+      month: First day of its month.
+      term: Y1S1, ...
+      item_raw: The item as I typed it.
+      item_clean: Lower case, single spaces. Match on this.
+      category: Food, Travel, Laundry, Air-Con, Internet, Haircut, Subscription, Others. Expenses only.
+      amount_sgd: Always positive. Use direction for in/out.
+      direction: "'in' or 'out'."
+      txn_kind: >
+        expense (money out), opening_balance (money carried over at the start of a month tab),
+        funding (family money), income (interest, cashback, gifts), refund (paid back: by a friend, or for
+        work), adjustment (Correction rows).
+      is_living_spend: True for everyday purchases (counted in living spend).
+      is_payback: True when a friend paid me back (subtracted from living spend).
+      living_amount: What the row adds to living spend. + purchase, - payback, NULL otherwise. SUM(living_amount) = living spend.
+      is_one_off: Tuition or hall fee (and the money sent for them).
+      is_reimbursable: "Work money: paid for a club or hall and paid back."
+      note: The sheet's Note cell.
+      source_tab: The sheet tab, e.g. 10/26. Cite it with source_row.
+      source_row: The sheet row number. Cite it so I can find the row.
+
+  dim_date:
+    description: One row per calendar day from 1 Jul 2025 to 31 May 2029.
+    columns:
+      date: The day.
+      month: First day of its month.
+      year: Calendar year.
+      day_of_week: Monday ... Sunday.
+      is_weekend: Saturday or Sunday.
+      study_year: 1–4, NULL in June.
+      semester: 1 or 2, NULL in June.
+      term: Y1S1, ..., NULL in June.
+      is_tracked: True when I was in Singapore and logging. False means no data, not S$0.
+
+metrics:
+  living_spend:
+    description: My own share of everyday spending.
+    sql: SUM(living_amount)          # on fact_transaction; or SUM(living_spend) on the summaries
+  living_spend_per_day:
+    description: Living spend divided by days in Singapore.
+    sql: SUM(living_spend) / SUM(tracked_days)   # on monthly_summary
+
+examples:
+  - question: How much did I spend in March 2026?
+    sql: SELECT living_spend, tracked_days FROM monthly_summary WHERE month = DATE'2026-03-01'
+  - question: What is my average daily spending this term compared with last term?
+    sql: >
+      SELECT term, ROUND(SUM(living_spend) / SUM(tracked_days), 2) AS per_day
+      FROM monthly_summary GROUP BY term ORDER BY MIN(month) DESC LIMIT 2
+  - question: How much have I spent on Morning Set 1?
+    sql: >
+      SELECT COUNT(*) AS times, ROUND(SUM(amount_sgd), 2) AS total_sgd, COLLECT_SET(item_raw) AS spellings
+      FROM fact_transaction WHERE is_living_spend AND item_clean LIKE '%morning set 1%'
+  - question: How much was tuition this year?
+    sql: >
+      SELECT txn_date, item_raw, amount_sgd FROM fact_transaction
+      WHERE txn_kind = 'expense' AND is_one_off AND study_year = 2 ORDER BY txn_date

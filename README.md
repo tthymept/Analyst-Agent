@@ -5,7 +5,8 @@ A personal data platform: my expense tracker (Google Sheets) → Databricks (bro
 Status: **Phase 2 in progress**. Phase 1 is done: `silver.transactions` is cleaned, tested, and its recomputed
 balance matches the sheet (`silver.balance_check`). Gold tables are built (`fact_transaction`, `dim_date`,
 `daily_living_spend`, `monthly_summary`) and monthly living spend reconciles with the sheet's own totals.
-The AI/BI dashboard **Money in Singapore** reads from gold. Next: Phase 3, the analyst agent.
+The AI/BI dashboard **Money in Singapore** reads from gold. **Phase 3 in progress:** a first version of the
+analyst agent answers questions from the terminal. Next: the golden question set, to measure it.
 
 ## The big picture
 
@@ -222,6 +223,35 @@ databricks bundle generate dashboard --resource money --force
 
 A `git push` without that step redeploys the file in the repo and **overwrites** UI edits.
 
+## Analyst agent (Phase 3, v1)
+
+Ask questions in plain English from the terminal:
+
+```powershell
+uv run ask "How much did I spend in March 2026?"
+uv run ask --sql "What's my average daily spending this term compared with last term?"   # also prints the SQL
+uv run ask --model databricks-gpt-oss-120b "..."                                           # try another model
+```
+
+It uses your Databricks CLI login (`~/.databrickscfg`), like the CLI itself.
+
+**How it works:** a hand-written tool-calling loop (`src/analyst_agent/agent/loop.py`). The model never does
+arithmetic: it reads the semantic layer, writes SQL, the warehouse computes, and it explains the result.
+
+| Piece | Where | What it does |
+|---|---|---|
+| Semantic layer | `semantic/money.yml` | Every gold table, column, metric and rule in words, plus example SQL. Edit this first when the agent gets a meaning wrong |
+| `list_datasets`, `describe_dataset` | `agent/tools.py` | Hand the model the semantic layer |
+| `run_sql` | `agent/tools.py` | Runs the model's SQL on the Serverless Starter Warehouse |
+| Model | `agent/loop.py` | A free model hosted by Databricks (default `databricks-qwen35-122b-a10b`), so the data stays in Databricks. Swappable behind one `chat` function |
+
+**Guardrails on `run_sql`** (checked by parsing the SQL with `sqlglot` before it reaches Databricks): exactly one
+statement; `SELECT` only; only the 4 gold tables; a `LIMIT 200` added when missing; a 30 s timeout. A rejected
+query goes back to the model as an error so it can fix it.
+
+**Model check (Oct 30):** on 4 test questions, Qwen 3.5, GPT-OSS 120B and Llama 4 Maverick got every number right.
+Llama 4 broke one rule (said "S$0" for a month with no data); Llama 3.3 70B got the first question wrong.
+
 ## Repo layout
 
 Rule of thumb: **logic lives in `src/`, notebooks only read → call → write.** That way the logic can be
@@ -233,6 +263,10 @@ src/analyst_agent/
   transform/silver_transactions.py   bronze -> silver cleaning, one function per step  (runs on Databricks)
   transform/gold.py                  silver -> gold tables and metric definitions      (runs on Databricks)
   transform/rules.py                 the business rules: patterns, categories, one-offs. Edit this file first
+  agent/loop.py                      the analyst agent: tool-calling loop + model           (runs on your laptop)
+  agent/tools.py                     semantic layer, SQL guardrails, run_sql
+  agent/cli.py                       `uv run ask "..."`
+semantic/money.yml                   the semantic layer: tables, columns, metrics, rules, examples
 notebooks/
   bronze/load_snapshots.py           snapshot JSON -> bronze.sheet_rows
   silver/build_transactions.py       bronze -> silver.transactions + silver.balance_check, via src/ + data tests
@@ -242,6 +276,7 @@ resources/money.dashboard.yml        the AI/BI dashboard resource
 dashboards/money.lvdash.json         the dashboard itself: SQL datasets + chart layout
 databricks.yml                       Databricks Asset Bundle: what to deploy (no workspace URL, the repo is public)
 tests/transform/                     pytest on a small fake workbook with the same quirks (no real data)
+tests/agent/                         guardrail and loop tests, with a fake model (no network)
 setup/                               one-time SQL: creates schemas and the Volume
 .github/workflows/                   deploy (test, then deploy) + daily ingest
 .env.example                         template for local secrets

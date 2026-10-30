@@ -12,11 +12,14 @@ dependencies = [
     "google-api-python-client>=2.100",
     "google-auth>=2.20",
     "python-dotenv>=1.0",
+    "pyyaml>=6.0.3",
+    "sqlglot>=30.26.0",
 ]
 
 [project.scripts]
 analyst-agent = "analyst_agent:main"
 ingest-sheet = "analyst_agent.ingest.pull_sheet:main"
+ask = "analyst_agent.agent.cli:main"
 
 [build-system]
 requires = ["uv_build>=0.12.11,<0.13.0"]
