@@ -341,11 +341,84 @@ git commit -m "feat(agent): tighten prompt rules and eval scoring" -m "- prompt:
 - eval: 47/55 -> 50/55 on the same scorer"
 ```
 
+## Step 8b: fix the agent's knowledge (the semantic layer)
+
+Meaning problems go in `semantic/money.yml`. One rule per root cause, each tested on the questions it targets plus their neighbours (to catch regressions), then a full run at the end.
+
+### 8b-0: the examples were leaking the test
+
+The semantic layer's 4 examples were written before the golden set, and some were near-copies of golden questions ("How much did I spend in March 2026?" = q01). That's **data leakage**: the agent saw test questions, with their SQL, before the test. Worse, the tuition example filtered on `is_one_off` alone, which includes hall fees: it *taught* q39's mistake. One example also used a real item name (against `CLAUDE.md`).
+
+They were replaced with different questions that show the same patterns (a monthly lookup, a per-day comparison by study year, matching an item, a category in a period joined to `dim_date`). A comment in the file now says examples must differ from the golden questions.
+
+Honest result: **48/55**. Reading the failures again found two more things:
+
+- **Scorer false fail:** "no data (not even S$0)" failed the `no_data` check because it contains "S$0". Now "not S$0" / "not even S$0" is ignored. Re-scored: **50/55**.
+- **Agent bug:** q36 ran the right query and then replied with nothing. The loop now asks once more ("You haven't written an answer yet…") when the final reply is empty. Tested with a scripted fake model.
+
+### 8b-1 to 8b-5: one rule per root cause
+
+| Rule | Root cause | Questions it fixed |
+| --- | --- | --- |
+| **Category or item?** A named category filters `category`; anything more specific matches `item_clean LIKE`; `monthly_summary` has no categories | Used the whole Travel category for one kind of trip; used the month's total for one category | q27, q22 |
+| **`is_one_off` mixes two kinds and both directions**, so never sum it alone; tuition vs hall by item, paid vs received by `txn_kind` | Summed all one-offs; counted hall money received as hall fees paid | q39, q40 |
+| **Money direction:** paid/spent/cost = out; received/got/paid back = in | Same as above | q40 |
+| **Per-month averages** divide by months with data, in SQL; the `COUNT(DISTINCT month)` trap named | Divided by months with the item only | q24 (flaky, see below) |
+| **A month without a year** = the most recent one with data; say which year | Guessed a year with no data | q52 |
+| **`item_clean` is lower case**, so write LIKE patterns in lower case; check spelling before saying "none" | A capitalised LIKE pattern matched nothing | q27 (second cause) |
+
+What worked, again: **concrete examples beat abstract rules.** "A transport line or app" didn't change q27; "bus rides or taxis are items inside Travel" did. Examples were chosen *not* to be the golden question (bus and taxi, not the item asked about; chicken rice, not a real item).
+
+Is "tell tuition from hall fees with item_clean" overfitting? No: it's a fact about the data any analyst needs, contains no answer, and helps any tuition or hall question, including new ones.
+
+**YAML colons, a third time:** "the category: one category holds…" and "Trap to avoid: …" broke the file again; one was caught only because the test run printed "1 error" (the filter showed "passed|failed" only). All rules are now folded blocks (`- >-`), where a colon is just text. Lesson: run the tests after every change, and make the test output filter show errors.
+
+### Results
+
+| Run | Score | Failures |
+| --- | --- | --- |
+| Baseline (step 7) | 47/55 | q18, q22, q24, q27, q33, q39, q40, q55 |
+| After 8a (prompt) | 50/55 | q22, q24, q27, q39, q40 |
+| 8b-0, leak-free examples (re-scored) | 50/55 | q24, q27, q36, q39, q40 |
+| After the 8b rules, full run 1 | **53/55** | q24, q52 |
+| After the 8b rules, full run 2 | **53/55** | q24, q27 |
+
+The last misses are **flaky**: q52 and q27 then passed 3 of 3 targeted runs after their rules (no-year, lower-case). **q24 is a known weakness:** with the per-month rule it passes some runs and fails others, sometimes contradicting itself ("every month… excluding months with no laundry"). **Stopped tuning it on purpose:** rewording rules until one question passes is overfitting too. Better fixes come later: retrieved few-shot examples (Phase 4) or a stronger model.
+
+Test (PowerShell, in the project folder):
+
+```powershell
+uv run pytest
+uv run eval --only q22,q27,q39,q40,q52
+uv run eval
+```
+
+Expect all tests to pass; the 5 targeted questions to pass; a full run around 53/55 (q24 may fail; one other question may flake).
+
+Commit (all of step 8), short version:
+
+```
+git add semantic/money.yml src/analyst_agent/agent tests/agent docs
+git commit -m "feat(agent): fix agent from eval failures, 47 to 53 of 55"
+```
+
+Commit with a body:
+
+```
+git add semantic/money.yml src/analyst_agent/agent tests/agent docs
+git commit -m "feat(agent): fix agent from eval failures, 47 to 53 of 55" -m "- prompt: numbers only from sql, answer as asked, truthful method, decline instead of substituting
+- semantic layer: leak-free examples; rules for category vs item, one-offs and direction, per-month, month without year, lower-case matching
+- loop: ask again after an empty reply
+- scorer: answer in the lead, refuse means no query, precise answers round, no-data answers may say not S$0; --rescore
+- eval: 47/55 -> 53/55 (same scorer); q24 still flaky"
+```
+
 ## Open items
 
 - **Read-only identity:** `run_sql` uses my own login; the guardrail is the SQL parser only.
 - **Genie on Free Edition:** not yet tried.
-- **Answer stability over many runs:** not measured in general, but seen once: q55 got two different answers in two runs at temperature 0. Scores can move by a question or two between runs.
+- **Answer stability over many runs:** two full runs after step 8 both scored 53/55 but missed different questions; q24 flips between pass and fail. A `--repeat N` option (run each question N times, report the pass rate) would measure this properly.
+- **q24 (per-month average)** is a known weakness of the current model; parked until Phase 4 (retrieved examples) or a model comparison.
 - **Questions whose reference answer changes over time** (q07, q08, q10, q13, q38 and other totals) are fine because answers are computed at eval time, but a hand-checked number will drift after the next sync.
 - **Questions across items with free-text names** ("public transport") need `search_values` (Phase 4).
 - **Two money-in rows** treated as paybacks whose meaning I haven't confirmed.
@@ -381,3 +454,6 @@ git commit -m "feat(agent): tighten prompt rules and eval scoring" -m "- prompt:
 - **Regression:** something that worked before and broke after a change; why every fix is checked on all 55 questions, not only the ones it targets.
 - **False pass / false fail:** the scorer passing a wrong answer / failing a right one. Both make the score lie.
 - **Re-scoring:** applying a changed scorer to saved answers, so old and new runs stay comparable.
+- **Data leakage:** test material (questions or their answers) showing up in what the system learns from, here the semantic layer's examples. It inflates the score.
+- **Flaky test:** one that passes or fails from run to run with no change. Judge it over several runs, not one.
+- **Stop rule:** deciding in advance when to stop tuning for one failure, so the fix doesn't turn into overfitting.

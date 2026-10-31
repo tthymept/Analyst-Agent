@@ -76,7 +76,8 @@ def score(question: dict, expected: dict | None, answer: str, agent_sql: list[st
     text = answer.lower()
     kind = question["type"]
     if kind == "no_data":
-        if re.search(ZERO_AMOUNT, text):
+        claimed = re.sub(r"not (even )?" + ZERO_AMOUNT, "", text)  # "no data (not S$0)" is the right answer
+        if re.search(ZERO_AMOUNT, claimed):
             return False, "reported S$0 for a period with no data"
         return (True, "said no data") if re.search(NO_DATA_WORDS, text) else (False, "didn't say there's no data")
     if kind == "refuse":  # declining means saying so AND not fetching other data instead

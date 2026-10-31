@@ -10,23 +10,60 @@ catalog: workspace
 schema: gold
 
 rules:
-  - Living spend is the default meaning of "spending", "spent", "expenses" and "cost of living". Use the
+  - >-
+    Living spend is the default meaning of "spending", "spent", "expenses" and "cost of living". Use the
     living_spend columns or `living_amount`, never a plain SUM(amount_sgd), which adds up tuition, opening
     balances and money coming in.
-  - Living spend is my own share of everyday spending. It leaves out tuition and hall fees (is_one_off),
+  - >-
+    Living spend is my own share of everyday spending. It leaves out tuition and hall fees (is_one_off),
     work money paid for a club or hall and paid back (is_reimbursable), Correction rows (txn_kind
     'adjustment'), and it subtracts what friends paid back (is_payback).
-  - Tuition, hall fees and work money are still in the data. Answer questions about them when asked, from
+  - >-
+    Tuition, hall fees and work money are still in the data. Answer questions about them when asked, from
     fact_transaction with is_one_off or is_reimbursable.
-  - A month or day with no data is not S$0. Days I was in Singapore have dim_date.is_tracked = true. If the
+  - >-
+    is_one_off mixes two kinds and both directions, so never sum it alone. The kinds are tuition and hall
+    fees (tell them apart with item_clean LIKE '%tuition%' or LIKE 'hall fee%'). The directions are fees I
+    paid (txn_kind = 'expense') and family money I received for them (txn_kind = 'funding'). A question
+    about one kind needs both filters, kind and direction.
+  - >-
+    Money direction. "Paid", "spent", "cost" and "bought" mean money out (direction = 'out'). "Received",
+    "got" and "paid back" mean money in (direction = 'in'). Filter on it whenever a question is about only
+    one side.
+  - >-
+    A month or day with no data is not S$0. Days I was in Singapore have dim_date.is_tracked = true. If the
     asked period has no tracked days, say there is no data for it.
-  - Per-day averages divide by tracked days (monthly_summary.tracked_days or dim_date.is_tracked), never by
+  - >-
+    Per-day averages divide by tracked days (monthly_summary.tracked_days or dim_date.is_tracked), never by
     calendar days.
-  - Terms are named Y<study year>S<semester>. Semester 1 = Aug–Dec (late-July arrival days count as
+  - >-
+    Per-month averages divide by the number of months with data (the rows of monthly_summary, partial months
+    included), not only the months where that thing was bought, unless the question says otherwise. Do the
+    division in SQL, e.g. SUM(...) / (SELECT COUNT(*) FROM monthly_summary). A trap to avoid is
+    COUNT(DISTINCT month) on fact_transaction filtered to one category or item counts only the months that
+    had it, which makes the average too high.
+  - >-
+    Terms are named Y<study year>S<semester>. Semester 1 = Aug–Dec (late-July arrival days count as
     semester 1), semester 2 = Jan–May. Year 1 = Aug 2025 to May 2026, year 2 = Aug 2026 to May 2027.
-  - Item names are free text with typos and different spellings ("Morning set 1", "morning Set 1 "). Match
+  - >-
+    Item names are free text with typos and different spellings ("Chicken rice", "chicken Rice "). Match
     items with item_clean (lower case, single spaces) and LIKE, and say which spellings you matched.
-  - Months are calendar months of the transaction date, not sheet tabs.
+    item_clean is always lower case, so write the LIKE pattern in lower case too ('%chicken rice%', never
+    '%Chicken Rice%'), or a match finds nothing. If a match finds nothing, check the spelling before
+    saying there are none.
+  - >-
+    Months are calendar months of the transaction date, not sheet tabs.
+  - >-
+    A month or date without a year means the most recent one that has data (look at monthly_summary or
+    dim_date.is_tracked), never a guessed year. Say which year you used.
+  - >-
+    Category or item? A category named in the question (food, travel, laundry, air con, internet, haircut,
+    subscription) means filtering fact_transaction.category. Anything more specific than a category means
+    matching item_clean with LIKE, NOT filtering the category, because one category holds many different
+    items. For example "bus rides" or "taxis" are items inside the Travel category (which also holds every
+    other way of getting around), so match item_clean LIKE '%bus%' or '%taxi%'; "coffee" is an item inside
+    Food. monthly_summary has no categories, so a question about one category, even for one month, needs
+    fact_transaction.
 
 tables:
   monthly_summary:
@@ -105,18 +142,21 @@ metrics:
     description: Living spend divided by days in Singapore.
     sql: SUM(living_spend) / SUM(tracked_days)   # on monthly_summary
 
+# Example questions are deliberately different from the golden questions in evals/golden.yml, so the eval
+# measures the agent on questions it hasn't seen (no leakage). They show patterns, not answers.
 examples:
-  - question: How much did I spend in March 2026?
-    sql: SELECT living_spend, tracked_days FROM monthly_summary WHERE month = DATE'2026-03-01'
-  - question: What is my average daily spending this term compared with last term?
+  - question: How many everyday purchases did I make in November 2025?
+    sql: SELECT living_purchases, tracked_days FROM monthly_summary WHERE month = DATE'2025-11-01'
+  - question: What was my living spend per day in each study year?
     sql: >
-      SELECT term, ROUND(SUM(living_spend) / SUM(tracked_days), 2) AS per_day
-      FROM monthly_summary GROUP BY term ORDER BY MIN(month) DESC LIMIT 2
-  - question: How much have I spent on Morning Set 1?
+      SELECT study_year, ROUND(SUM(living_spend) / SUM(tracked_days), 2) AS per_day
+      FROM monthly_summary GROUP BY study_year ORDER BY study_year
+  - question: How much have I spent on chicken rice?
     sql: >
       SELECT COUNT(*) AS times, ROUND(SUM(amount_sgd), 2) AS total_sgd, COLLECT_SET(item_raw) AS spellings
-      FROM fact_transaction WHERE is_living_spend AND item_clean LIKE '%morning set 1%'
-  - question: How much was tuition this year?
+      FROM fact_transaction WHERE is_living_spend AND item_clean LIKE '%chicken rice%'
+  - question: How much did I spend on food on weekends in Y1S2?
     sql: >
-      SELECT txn_date, item_raw, amount_sgd FROM fact_transaction
-      WHERE txn_kind = 'expense' AND is_one_off AND study_year = 2 ORDER BY txn_date
+      SELECT ROUND(SUM(f.amount_sgd), 2) AS food_weekends FROM fact_transaction f
+      JOIN dim_date d ON d.date = f.txn_date
+      WHERE f.is_living_spend AND f.category = 'Food' AND f.term = 'Y1S2' AND d.is_weekend

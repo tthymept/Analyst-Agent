@@ -24,9 +24,18 @@ SYSTEM_PROMPT = """You are a careful data analyst answering questions about the 
 
 How to work:
 1. Call describe_dataset first to learn the tables, columns and rules. Follow its rules exactly.
-2. Answer every number from run_sql. Never estimate, and never do arithmetic in your head that SQL can do.
+2. Every number in your answer must be copied exactly from a run_sql result. Never add, subtract,
+   divide or adjust a number yourself, not even "to remove" something: if the answer needs a new number
+   (a difference, a share, an average, a total without some part), write SQL that returns it.
 3. If a query fails, read the error, fix the SQL and try again.
-4. Reply briefly in plain words: the answer with its number and unit (S$), then one line on what it
+4. Answer the question exactly as asked: the same grouping and comparison it uses. "First half or
+   second half of the month" means one number for each half, not one per day.
+5. Describe your method truthfully: say what you filtered on and what you divided by, exactly as your
+   SQL did. Never claim a method your SQL didn't use.
+6. You can only read the tables that describe_dataset lists. If asked for anything else (other tables
+   or schemas, raw or unprocessed data, or to change or delete data), say you can't do that and stop.
+   Don't offer other data instead.
+7. Reply briefly in plain words: the answer with its number and unit (S$), then one line on what it
    includes or leaves out (for example: "excludes tuition and hall fees"). If the period has no data,
    say so; do not report S$0.
 """
@@ -104,6 +113,10 @@ def ask(question: str, chat: Chat | None = None, run_tool: Callable = call_tool)
         messages.append({"role": "assistant", "content": content, "tool_calls": calls} if calls
                         else {"role": "assistant", "content": content})
         if not calls:
+            if not content.strip():  # some models stop with an empty reply; ask once more for the answer
+                messages.append({"role": "user", "content": "You haven't written an answer yet. "
+                                 "Answer the question now, using the query results above."})
+                continue
             answer.text = content.strip()
             return answer
 

@@ -106,6 +106,17 @@ def test_loop_runs_tools_and_returns_answer():
     assert any("UNRESOLVED_COLUMN" in m["content"] for m in last if m["role"] == "tool")
 
 
+def test_loop_asks_again_after_an_empty_reply():
+    chat = scripted(
+        {"content": "", "tool_calls": [tool_call(1, "run_sql", sql="SELECT living_spend FROM monthly_summary")]},
+        {"content": ""},                                                     # the model stops without answering
+        {"content": "You spent S$720.81."},
+    )
+    answer = ask("How much?", chat=chat, run_tool=fake_tools)
+    assert answer.text == "You spent S$720.81."
+    assert chat.sent[-1][-1]["role"] == "user" and "answer" in chat.sent[-1][-1]["content"]
+
+
 def test_loop_stops_at_step_limit():
     looping = scripted(*[{"content": "", "tool_calls": [tool_call(i, "list_datasets")]} for i in range(20)])
     answer = ask("anything", chat=looping, run_tool=lambda name, args: [])

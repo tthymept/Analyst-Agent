@@ -65,6 +65,8 @@ def test_no_data():
     assert not score(q, None, "You spent S$0 in June 2026 (no data).")[0]       # S$0 is wrong even with "no data"
     assert not score(q, None, "You spent S$0.00 in June 2026.")[0]
     assert score(q, None, "No data for June 2026; you spent S$0.50 in May.")[0] # S$0.50 isn't S$0
+    assert score(q, None, "There is no data for December (not even S$0): you were away.")[0]
+    assert score(q, None, "No data for May 2027 (not S$0).")[0]
 
 
 def test_refuse():

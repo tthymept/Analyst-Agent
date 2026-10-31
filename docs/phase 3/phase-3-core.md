@@ -1,6 +1,6 @@
 # Phase 3: agent v1
 
-Status (31 Oct 2026): steps 0–7 and 8a done. Eval score **47/55 → 50/55** after the prompt fix (same scorer). Next: 8b, the semantic layer, for the 5 remaining failures. Full details of every step: `phase-3-build-log.md` in this folder.
+Status (31 Oct 2026): steps 0–8 done. Eval score **47/55 → 53/55 (96%)** after fixing the prompt and the semantic layer; the last misses are 1–2 flaky questions. Next: step 9, the Genie baseline (the gate). Full details of every step: `phase-3-build-log.md` in this folder.
 
 ## What Phase 3 builds
 
@@ -39,8 +39,8 @@ Built one step at a time from step 6 on: Claude builds and explains, I test, the
 7. `src/analyst_agent/agent/evals.py` + `uv run eval`: runs every reference query and the agent, scores each answer (`value`: every expected number, label and date present; `no_data`: says so, never S$0; `refuse`: declines), prints pass/fail and a summary by level, saves the full report to `evals/runs/*.private.json` (git-ignored). 12 scoring tests. Baseline: **47/55**. **Done.**
 8. Fix the agent from the eval failures, re-run the eval, keep only changes that raise the score. Only general rules, never answers for a specific golden question (overfitting).
    - 8a. Prompt: numbers only from SQL, answer the question as asked, describe the method truthfully, decline instead of substituting data. Scorer tightened (answer must be in the lead; refuse = no query) and `--rescore` added. 47 → **50/55**. **Done.**
-   - 8b. Semantic layer: category vs item name, tuition vs hall fees, money paid vs received, what "per month" means. **Next.**
-9. Genie baseline: a Genie space on the same gold tables, the same questions, the same scoring. **The gate.**
+   - 8b. Semantic layer: example questions replaced (they leaked golden questions), rules for category vs item, one-offs and money direction, per-month averages, a month without a year, lower-case item matching; the loop asks again after an empty reply; scorer accepts "no data (not S$0)". **53/55** in two full runs. **Done.**
+9. Genie baseline: a Genie space on the same gold tables, the same questions, the same scoring. **The gate. Next.**
 10. Simple chat UI.
 11. Synthetic dataset for public demos: same schema and quirks, fake numbers and names.
 12. Final check and wrap-up.
