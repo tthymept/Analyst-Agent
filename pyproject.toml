@@ -20,6 +20,7 @@ dependencies = [
 analyst-agent = "analyst_agent:main"
 ingest-sheet = "analyst_agent.ingest.pull_sheet:main"
 ask = "analyst_agent.agent.cli:main"
+eval = "analyst_agent.agent.evals:main"
 
 [build-system]
 requires = ["uv_build>=0.12.11,<0.13.0"]
