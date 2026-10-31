@@ -1,6 +1,6 @@
 # Phase 3: agent v1
 
-Status (30 Oct 2026): steps 0–5 done. The agent answers questions from the terminal (`uv run ask "..."`) and got 4 of 4 test questions right. Next: step 6, the golden question set. Full details of every step: `phase-3-build-log.md` in this folder.
+Status (31 Oct 2026): steps 0–7 and 8a done. Eval score **47/55 → 50/55** after the prompt fix (same scorer). Next: 8b, the semantic layer, for the 5 remaining failures. Full details of every step: `phase-3-build-log.md` in this folder.
 
 ## What Phase 3 builds
 
@@ -35,12 +35,15 @@ Built one step at a time from step 6 on: Claude builds and explains, I test, the
 3. `src/analyst_agent/agent/loop.py` + `cli.py`: the tool-calling loop (max 8 steps), tool errors returned to the model, `uv run ask "..." [--sql] [--model ...]`. **Done.**
 4. `tests/agent/test_agent.py`: guardrail tests (allowed and rejected queries) and loop tests with a scripted fake model, no network. **Done.**
 5. Model comparison on real data: 5 hosted models, 4 questions, answers checked by hand. Default: Qwen 3.5 122B. **Done.**
-6. Golden question set: 40–60 questions (easy, multi-step, ambiguous, trick), each with an expected answer computed by hand in SQL. Stored without real numbers in the repo (see Decisions). **Next.**
-7. Eval runner: run the agent on every question, score each answer, record tool calls and time; a report I can compare between runs.
-8. Genie baseline: a Genie space on the same gold tables, the same questions, the same scoring. **The gate.**
-9. Simple chat UI.
-10. Synthetic dataset for public demos: same schema and quirks, fake numbers and names.
-11. Final check and wrap-up.
+6. `evals/golden.yml`: 55 questions in 7 groups (months, terms, categories, items, time patterns, money in, traps), each with a reference SQL query and a type (`value`, `no_data`, `refuse`). Answers are computed from the reference SQL, never stored in the repo; a private, git-ignored copy (`evals/golden-answers.private.md`) is for checking by hand. Checked by recomputing every answer from silver with separate SQL: 53/53 match. **Done.**
+7. `src/analyst_agent/agent/evals.py` + `uv run eval`: runs every reference query and the agent, scores each answer (`value`: every expected number, label and date present; `no_data`: says so, never S$0; `refuse`: declines), prints pass/fail and a summary by level, saves the full report to `evals/runs/*.private.json` (git-ignored). 12 scoring tests. Baseline: **47/55**. **Done.**
+8. Fix the agent from the eval failures, re-run the eval, keep only changes that raise the score. Only general rules, never answers for a specific golden question (overfitting).
+   - 8a. Prompt: numbers only from SQL, answer the question as asked, describe the method truthfully, decline instead of substituting data. Scorer tightened (answer must be in the lead; refuse = no query) and `--rescore` added. 47 → **50/55**. **Done.**
+   - 8b. Semantic layer: category vs item name, tuition vs hall fees, money paid vs received, what "per month" means. **Next.**
+9. Genie baseline: a Genie space on the same gold tables, the same questions, the same scoring. **The gate.**
+10. Simple chat UI.
+11. Synthetic dataset for public demos: same schema and quirks, fake numbers and names.
+12. Final check and wrap-up.
 
 Commit status: steps 1–5 in `602447a`. Step 0 (docs) is in the next commit.
 
@@ -51,7 +54,7 @@ Commit status: steps 1–5 in `602447a`. Step 0 (docs) is in the next commit.
 - **Guardrails in code, not in the prompt:** `check_sql` rejects anything but one `SELECT` on gold before it reaches Databricks.
 - **Tool errors go back to the model,** not to me, so it can fix its own query.
 - **Written by hand first,** before LangGraph or Agent Bricks, to understand what those frameworks do.
-- **Golden answers stay private:** the expected numbers are real data, so they can't go in the public repo. Decided in step 6.
+- **Golden answers are computed, not stored** (step 6): the repo keeps each question's reference SQL; the expected answer is whatever it returns from gold at eval time. No real numbers in the public repo, and answers stay right as the data grows. A private copy (`*.private.*`, git-ignored) is for checking by hand.
 
 ## Things to check during Phase 3
 

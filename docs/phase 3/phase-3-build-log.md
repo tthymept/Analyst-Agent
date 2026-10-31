@@ -138,11 +138,215 @@ Lesson: an agent that runs isn't an agent that's right. That's what the golden q
 
 Commit (steps 1–5): `602447a` "Analyst agent v1: semantic layer, guarded run_sql, tool loop".
 
+## Step 6: golden question set (`evals/golden.yml`)
+
+55 questions the agent should get right, in 7 groups:
+
+| Group | Questions | What it tests |
+| --- | --- | --- |
+| A. Months | q01–q10 | Simple lookups, highest/lowest month, totals, per-day over tracked days |
+| B. Terms and years | q11–q18 | Term names, "this term vs last term", leaving out the July arrival days |
+| C. Categories | q19–q26 | Category totals, shares, ranking, an ambiguous "per month" |
+| D. Items | q27–q32 | Free-text item names matched with `LIKE` (MRT, Grab), most frequent, most expensive |
+| E. Time patterns | q33–q38 | Weekend vs weekday, top day and week, days with no purchases, last 7 days |
+| F. Money in, one-offs, work | q39–q46 | Tuition, hall fees, funding, work money, income, paybacks, corrections, "including tuition" |
+| G. Traps | q47–q55 | No data (June, December, the future, an untracked day), a tracked S$0 day, a month without a year, an ambiguous "expenses", a delete request, a bronze request |
+
+Levels: 19 easy, 21 medium, 6 hard, 9 trick. Types: 49 `value`, 4 `no_data`, 2 `refuse`.
+
+Each question has:
+
+- **`sql`:** a reference query written by hand and checked. It runs through the agent's own guardrails, so it uses only gold tables.
+- **`type`:** `value` (every value in the reference result must appear in the answer), `no_data` (must say there's no data, never S$0), or `refuse` (must decline, run nothing).
+- **`note`** where a question is tricky or has more than one fair reading.
+
+**The answers aren't stored in the repo.** The expected answer is whatever the reference SQL returns from gold when the eval runs. That keeps real numbers out of the public repo, and keeps answers right as the data grows ("total so far" changes every week). This is how text-to-SQL evals usually work: **execution accuracy**, comparing results, not SQL text.
+
+**A private copy for checking:** `evals/golden-answers.private.md` holds every question with its current answer. It matches `*.private.*` in `.gitignore`, so git never sees it. Verified with `git check-ignore -v evals/golden-answers.private.md` → `.gitignore:14:*.private.*`.
+
+Mistakes caught while building this step (both worth remembering):
+
+- **A `.gitignore` rule with a comment on the same line doesn't work:** `*.private.*  # note` makes the comment part of the pattern. The first `git check-ignore` printed nothing, so the private file would have been committed. Comments go on their own line.
+- **YAML values starting with a quote:** `note: "This term" = ...` ends the value at the second quote and then fails. Long notes now use `note: >-` (a folded block).
+**Checked, independently (30 Oct):** every answer was recomputed by a second route: SQL written separately on `silver.transactions`, without gold's `living_amount`, `monthly_summary` or `dim_date` (tracked days rebuilt from each tab's first and last date). **53 of 53 answerable questions match**; the 2 `refuse` questions have no answer to compare. The checker itself was tested by feeding it a deliberately wrong query, which it reported as a difference. The agent's model (Qwen) was *not* used: the answer key must not come from the thing being graded.
+
+- After reading the answers, q35 was reworded ("no everyday purchases", since a day with only work purchases counted as zero) and q37's week start was cast to a date.
+
+Test (PowerShell, in the project folder):
+
+```powershell
+uv run python -c "import yaml; g = yaml.safe_load(open('evals/golden.yml', encoding='utf-8')); print(len(g['questions']), 'questions')"
+git check-ignore -v evals/golden-answers.private.md
+git status --short -uall evals
+```
+
+Expect `55 questions`; the ignore rule on `.gitignore:14`; and only `evals/golden.yml` listed as new. Then open `evals/golden-answers.private.md` and check every answer against what you know of your data.
+
+Commit, short version:
+
+```
+git add evals/golden.yml .gitignore docs
+git commit -m "feat(evals): add golden question set with reference sql"
+```
+
+Commit with a body:
+
+```
+git add evals/golden.yml .gitignore docs
+git commit -m "feat(evals): add golden question set with reference sql" -m "- 55 questions in 7 groups, levels easy to trick, types value/no_data/refuse
+- expected answers come from reference sql at eval time, never stored (public repo)
+- ignore *.private.* for the hand-check copy of the answers
+- docs: phase 3 step 6"
+```
+
+## Step 7: eval runner (`agent/evals.py`, `uv run eval`)
+
+For each golden question: run the reference SQL (the expected answer), ask the agent, score the answer text.
+
+**Three different queries, easy to mix up:**
+
+| | Who writes it | Where it lives | Its job |
+| --- | --- | --- | --- |
+| Reference query | Claude, by hand | `evals/golden.yml` → `sql:` | The answer key: running it gives the correct answer |
+| Cross-check query | Claude, separately, on silver | Not in the repo (step 6 only) | Checks the answer key itself |
+| The agent's query | Qwen, live, during `uv run eval` | `evals/runs/*.private.json` → `agent_sql` | The thing being tested |
+
+The agent only ever gets the question text, never the reference query. A FAIL means the agent's *answer sentence* didn't contain the expected values. Its SQL can be right and the answer still wrong (q18: right SQL, then it subtracted July again in its head).
+
+```
+golden.yml: question + reference sql
+   │ run reference sql            │ send only the question
+   ▼                              ▼
+expected rows                Qwen: own SQL → own sentence
+   └──── every expected value in the sentence? ────┘ → PASS / FAIL
+```
+
+- **`value`:** every cell of the expected result must appear in the answer. Numbers are pulled out of the text (`S$8,129.57` → 8129.57) and must match to the cent; amounts of 100 or more may be rounded to whole dollars. Dates may be written several ways (`2026-09-28`, `28 September 2026`). Labels (a month, a term, a category) must appear as words.
+- **`no_data`:** must say there's no data (or that I wasn't tracked / was in Thailand), and must **not** contain S$0, even next to "no data".
+- **`refuse`:** must decline ("can't", "read-only", "there is no …").
+- Prints `PASS`/`FAIL`, seconds and tool steps per question, then the score by level. The full report (answers, the agent's SQL, the expected rows) goes to `evals/runs/<time>.private.json`, git-ignored because it holds real numbers.
+- `--only q01,q05` and `--level easy` run a subset; `--model` tries another endpoint.
+- `tests/agent/test_evals.py`: 12 scoring tests (formats, rounding, labels, dates, every row present, S$0 with "no data" still fails, refusals, a failed reference query never passes).
+
+**First full run (30 Oct, Qwen 3.5 122B): 47/55 (85%)**, about 6.5 s and 4 tool steps per question, ~6 minutes in total.
+
+| Level | Score |
+| --- | --- |
+| easy | 16/19 |
+| medium | 19/21 |
+| hard | 4/6 |
+| trick | 8/9 |
+
+Every failure was read before trusting the score. Two looked like **my** mistakes and were fixed first:
+
+- q24 asked "per month" without saying which months; the question now says "counting every month I was in Singapore".
+- q55's refusal check only knew words like "can't"; it now also accepts "there is no …" and "not available".
+
+Re-running those two, both still failed, now for real: on q24 the agent *said* it counted every month but divided by the months with laundry; on q55 it called a gold table "bronze-level data", a different answer from the first run. So all 8 failures are the agent's:
+
+| Question | What went wrong |
+| --- | --- |
+| q18 Y1S1 without July | Right SQL, then subtracted July again in its head (the model did arithmetic) |
+| q22 travel in a month | Gave the month's whole living spend, not the Travel category |
+| q24 laundry per month | Said "every month", divided by months with laundry |
+| q27 MRT trips | Counted every Travel row, instead of matching "mrt" in item names |
+| q33 weekend vs weekday | Listed each weekday instead of the two averages |
+| q39 tuition | Summed all one-offs (tuition + hall fees) |
+| q40 hall fees | Counted hall money *received* as hall fees paid (no direction filter) |
+| q55 bronze | Didn't decline; called a gold table "bronze-level" |
+
+Lesson: **read the failures before trusting a score.** A failure can be the agent, the question, or the scorer; only the first kind is fixed in the agent.
+
+Test (PowerShell, in the project folder):
+
+```powershell
+uv run pytest
+uv run eval --only q01,q13,q47,q51,q54
+uv run eval
+```
+
+Expect all tests to pass; the 5 sample questions to pass; and a full score near 47/55 (the model isn't perfectly repeatable, so ±1–2 is normal). `git status` must not list anything under `evals/runs/`.
+
+Commit, short version:
+
+```
+git add src/analyst_agent/agent/evals.py tests/agent/test_evals.py evals/golden.yml pyproject.toml uv.lock CLAUDE.md docs
+git commit -m "feat(evals): add eval runner and scoring"
+```
+
+Commit with a body:
+
+```
+git add src/analyst_agent/agent/evals.py tests/agent/test_evals.py evals/golden.yml pyproject.toml uv.lock CLAUDE.md docs
+git commit -m "feat(evals): add eval runner and scoring" -m "- uv run eval: reference sql vs agent answer for every golden question
+- scoring for value, no_data and refuse questions, with 12 tests
+- full reports saved as evals/runs/*.private.json (git-ignored)
+- golden q24 made unambiguous
+- baseline: 47/55 on qwen 3.5 122b"
+```
+
+## Step 8a: fix the agent's behaviour (the prompt)
+
+The 8 failures from step 7 had 5 root causes. Behaviour problems go in the prompt (`SYSTEM_PROMPT` in `agent/loop.py`); meaning problems go in the semantic layer (8b).
+
+**Rule for every fix: general, never about one golden question.** Writing "for tuition use `LIKE '%tuition%'`" would pass q39 by teaching the answer key, and the score would stop meaning anything (**overfitting to the test set**). One draft rule even used "weekends or weekdays" as its example, which is golden q33 word for word; it was swapped for an example that isn't in the test.
+
+Prompt changes:
+
+- **Rule 2, numbers only from SQL,** made concrete: never add, subtract, divide or adjust a returned number, "not even to remove something"; a derived number needs its own SQL. (The old "never do arithmetic in your head" was ignored in q18.)
+- **Rule 4, answer exactly as asked:** the same grouping and comparison as the question.
+- **Rule 5, describe the method truthfully:** never claim a method the SQL didn't use (q24 said "every month" and divided by months with laundry).
+- **Rule 6, decline instead of substituting:** other tables, raw data, changes or deletes → say you can't and stop; don't offer other data.
+
+**The scorer had bugs too,** found by reading every result instead of trusting the score:
+
+- **False pass, too lenient:** q39 passed with a wrong headline ("S$23,729.33 in tuition and hall fees") because the expected number appeared in a breakdown further down. Now the expected values must be in the **lead** (the first paragraph), unless the lead has no amount at all (e.g. "Your top 3 categories are:" before a list). A first version counted "top **3**" as a number; a test caught it, so the lead must hold an S$ value, a decimal or a percentage.
+- **False pass, too lenient (from step 7):** widening the refusal words to "there is no …" passed q55's baseline answer, which said "there is no bronze table" and then showed 200 rows anyway. Now a `refuse` question passes only if the agent declines **and runs no query**.
+- **False fail, too strict:** q20's answer "68.66%" failed against "68.7". A more precise answer is now rounded to the expected value's decimals before comparing; a less precise one ("69%") still fails.
+- **`--rescore REPORT`:** re-scores a saved report with the current scorer, with no agent calls. Needed because comparing two scores only means something if both used the same scorer.
+
+Results (both runs scored with the final scorer):
+
+| Run | Score | Failures |
+| --- | --- | --- |
+| Baseline (step 7) | 47/55 (85%) | q18, q22, q24, q27, q33, q39, q40, q55 |
+| After 8a | **50/55 (91%)** | q22, q24, q27, q39, q40 |
+
+Fixed by the prompt: q18 (arithmetic), q33 (answer as asked), q55 (decline). q24 no longer loops, but still divides by the wrong months. A side effect seen on the way: with the stricter "never divide yourself" rule, q24 once ran the same query until it hit the 8-step limit; a rule about *what* to compute (8b) is the real fix. No question that passed before fails now.
+
+Test (PowerShell, in the project folder):
+
+```powershell
+uv run pytest
+uv run eval --rescore evals/runs/<baseline report>.private.json
+uv run eval
+```
+
+Expect all tests to pass; the baseline re-scores to 47/55; a full run near 50/55 (±1–2, the model isn't perfectly repeatable).
+
+Commit, short version:
+
+```
+git add src/analyst_agent/agent/loop.py src/analyst_agent/agent/evals.py tests/agent/test_evals.py docs
+git commit -m "feat(agent): tighten prompt rules and eval scoring"
+```
+
+Commit with a body:
+
+```
+git add src/analyst_agent/agent/loop.py src/analyst_agent/agent/evals.py tests/agent/test_evals.py docs
+git commit -m "feat(agent): tighten prompt rules and eval scoring" -m "- prompt: numbers only from sql, answer as asked, truthful method, decline instead of substituting
+- scorer: values must be in the answer's lead; refuse means no query; precise answers round to expected decimals
+- uv run eval --rescore to re-score saved reports with the current scorer
+- eval: 47/55 -> 50/55 on the same scorer"
+```
+
 ## Open items
 
 - **Read-only identity:** `run_sql` uses my own login; the guardrail is the SQL parser only.
 - **Genie on Free Edition:** not yet tried.
-- **Answer stability over many runs:** not measured.
+- **Answer stability over many runs:** not measured in general, but seen once: q55 got two different answers in two runs at temperature 0. Scores can move by a question or two between runs.
+- **Questions whose reference answer changes over time** (q07, q08, q10, q13, q38 and other totals) are fine because answers are computed at eval time, but a hand-checked number will drift after the next sync.
 - **Questions across items with free-text names** ("public transport") need `search_values` (Phase 4).
 - **Two money-in rows** treated as paybacks whose meaning I haven't confirmed.
 
@@ -165,3 +369,15 @@ Commit (steps 1–5): `602447a` "Analyst agent v1: semantic layer, guarded run_s
 - **Eval / golden set:** questions with known correct answers, used to score the agent after every change.
 - **Baseline:** what you compare against (Genie).
 - **Execution accuracy:** whether the answer's numbers match the expected ones, regardless of how the SQL was written.
+- **Reference query:** the trusted SQL for a golden question; its result is the expected answer.
+- **Independent check:** computing the same answer by a different route (here silver instead of gold, separately written SQL); agreement means both are probably right, disagreement means one has a bug.
+- **Testing the test:** feeding a check a case it must fail, to prove it can fail.
+- **`.gitignore` pattern:** `*.private.*` matches any file with `.private.` in its name, anywhere in the repo.
+- **Scorer:** the code that decides pass or fail. It can be too strict (fails a fair answer) or too lenient (passes a wrong one), so its rules are tested too.
+- **Baseline score:** the first score, that later changes are compared with.
+- **Non-determinism:** the same input giving different outputs; LLMs do this a little even at temperature 0.
+- **Eval-driven development:** change → re-run the eval → keep the change only if the score goes up (and nothing else breaks).
+- **Overfitting to the test set:** tuning the agent to the exact golden questions, so the score rises without the agent getting better at new questions.
+- **Regression:** something that worked before and broke after a change; why every fix is checked on all 55 questions, not only the ones it targets.
+- **False pass / false fail:** the scorer passing a wrong answer / failing a right one. Both make the score lie.
+- **Re-scoring:** applying a changed scorer to saved answers, so old and new runs stay comparable.

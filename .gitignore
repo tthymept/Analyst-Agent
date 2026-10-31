@@ -10,6 +10,8 @@ data/
 *.xlsx
 *.csv
 snapshot_*.json
+# Anything with real numbers, e.g. evals/golden-answers.private.md
+*.private.*
 
 # Databricks bundle cache
 .databricks/
