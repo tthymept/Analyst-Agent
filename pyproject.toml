@@ -13,6 +13,7 @@ dependencies = [
     "google-auth>=2.20",
     "python-dotenv>=1.0",
     "pyyaml>=6.0.3",
+    "rich>=15.0.0",
     "sqlglot>=30.26.0",
 ]
 
