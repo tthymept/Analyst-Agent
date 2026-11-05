@@ -17,6 +17,8 @@ Docs: `docs/analyst-agent-project-plan.md` (the whole plan), `docs/phase N/phase
 uv run pytest                                  # all tests (~1 min, local Spark + agent tests)
 uv run ask "How much did I spend in March 2026?"   # the analyst agent (add --sql to see its queries)
 uv run eval                                    # score the agent on evals/golden.yml (~6 min; --only q01,q05)
+uv run eval --genie                            # score the Genie space the same way (~20 min, paced)
+uv run streamlit run app/chat.py               # the chat page, on this laptop only (real data)
 databricks bundle validate                     # check the bundle (job + dashboard)
 gh workflow run ingest                         # pull the sheet now and rebuild bronze → silver → gold
 gh run watch                                   # follow a GitHub Actions run

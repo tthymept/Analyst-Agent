@@ -1,6 +1,6 @@
 # Phase 3: agent v1
 
-Status (31 Oct 2026): steps 0–8 done. Eval score **47/55 → 53/55 (96%)** after fixing the prompt and the semantic layer; the last misses are 1–2 flaky questions. Next: step 9, the Genie baseline (the gate). Full details of every step: `phase-3-build-log.md` in this folder.
+Status (6 Nov 2026): steps 0–8, 9a–9c and 10 done. Agent **53/55**; Genie with tables only (round A) **31/55**. Next: 9d, Genie with our rules and examples (round B), which is the gate. Full details of every step: `phase-3-build-log.md` in this folder.
 
 ## What Phase 3 builds
 
@@ -43,9 +43,9 @@ Built one step at a time from step 6 on: Claude builds and explains, I test, the
 9. Genie baseline: a Genie space on the same gold tables, the same questions, the same scoring. **The gate: the agent must beat Genie with our rules and examples (round B).**
    - 9a. Access check: the Genie API works on Free Edition. **Done.**
    - 9b. Create the space from code, ask one test question. **Done.**
-   - 9c. Run and score round A (tables only). **Next.**
-   - 9d. Run and score round B (with our rules and examples).
-10. Simple chat UI.
+   - 9c. Run and score round A (tables only): **31/55**, every wrong answer from a wrong query. **Done.**
+   - 9d. Run and score round B (with our rules and examples), and the agent again on the same day. **Next.**
+10. Simple chat UI: a Streamlit page in `app/chat.py`, on this laptop only for now. **Done.**
 11. Synthetic dataset for public demos: same schema and quirks, fake numbers and names.
 12. Final check and wrap-up.
 

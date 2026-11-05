@@ -474,6 +474,100 @@ git commit -m "feat(genie): create baseline genie space and ask it from code" -m
 - fix the gate before scoring: the agent must beat genie with our rules and examples"
 ```
 
+## Step 9c: score Genie, tables only (round A)
+
+`uv run eval --genie` asks the Genie space the same 55 questions and scores it with the same `score()`. It's paced to one question every 13 seconds to stay under the rate limit.
+
+What counts as Genie's answer, decided before the run:
+
+- **Scored:** only its written answer, as with the agent. Not the line restating the question.
+- **Recorded, not scored:** whether its result tables alone would pass. That separates wrong queries from wrong writing. It's a hint: labels and dates are formatted differently in a table, and a long table can pass by chance.
+
+### Testing the test, twice more
+
+- **False fail:** on a 3-question trial, Genie correctly declined to delete data and ran no query, but failed because its wording wasn't in the refusal list. The list was extended. A plain `$0` now also counts as `S$0`, because Genie doesn't know the currency.
+- **False pass:** q08 asks about "this month", and the data had no rows for the current month. With nothing expected, the scorer said "all values present". Genie had given last month's total as this month's. Now a reference query with no rows means the right answer is "no data". Found only by reading the passes too, not just the failures. Re-scored: 32 → **31**.
+
+The agent's last full run, re-scored with the final scorer, stays at 53. `--rescore` prints the new score but doesn't change the saved report.
+
+### Results
+
+| Level | Agent (31 Oct) | Genie round A (5 Nov) |
+| --- | --- | --- |
+| Easy | 19/19 | 13/19 |
+| Medium | 20/21 | 11/21 |
+| Hard | 5/6 | 3/6 |
+| Trick | 9/9 | 4/9 |
+| **Total** | **53/55** | **31/55** |
+
+All 24 Genie failures were read by hand. None was a scorer error.
+
+| Why Genie failed | Questions | Count |
+| --- | --- | --- |
+| Doesn't know what "spending" means here, so it adds tuition, money coming in or work money | q18, q19, q20, q21, q23, q26, q28, q31, q39, q40, q46, q53 | 12 |
+| Reports 0 for a period with no data, or last month's total as this month's | q08, q47, q48, q49, q50 | 5 |
+| Doesn't know how this data is organised (category vs item, how a kind of row is labelled or spelled) | q25, q42, q43, q45 | 4 |
+| Query logic (compares with only one term, a join that multiplies rows, counts back from today instead of the last data) | q13, q24, q38 | 3 |
+
+**Every wrong answer came from a wrong query:** no question failed in writing while its table would have passed. Genie is good at direct lookups, and it declined both refuse questions.
+
+### How to read this honestly
+
+- **Not yet a fair fight.** The agent was tuned on these exact questions in step 8, while Genie got no help. That's why round A isn't the gate. Most of its failures are missing knowledge, which round B supplies.
+- **Different days.** The agent's run is from 31 Oct, and the data has changed since. Each run compares against the reference answers of its own day, so each score is valid, but step 9d runs both on the same day.
+- **q08 changes with the date.** On 31 Oct it had an answer; this month it's "no data", because the data currently ends on 31 Oct. The nightly ingest is succeeding, so November just isn't in the sheet yet.
+
+Test (PowerShell, in the project folder; about 15–20 minutes):
+
+```powershell
+uv run pytest tests/agent
+uv run eval --genie
+```
+
+Expect the tests to pass, and a total near 31/55. Genie's answers can vary between runs.
+
+## Step 10: a simple chat page
+
+`app/chat.py` is a Streamlit page. It's thin, like the notebooks: the agent is still `ask` in `src`. It shows the question, the answer, the SQL in a fold-out section, and the steps and time taken.
+
+Streamlit reruns the whole script on every interaction, so normal variables are wiped each time. The chat history lives in `st.session_state`, which survives reruns.
+
+What would have gone wrong:
+
+- Streamlit reads `$...$` as a math formula, which garbles two S$ amounts in one answer. Dollar signs are escaped, and a test covers it.
+- By default the page can be reached from other devices on the network and sends usage stats, and it has a Deploy button. `.streamlit/config.toml` limits it to localhost, turns the stats off and hides the button. It's only read when the page is started **from the project folder**.
+
+`streamlit` is a dev dependency, so it isn't part of the package.
+
+Limits: each question starts fresh, so the page shows history but the agent doesn't see it; and it's laptop only, because it shows real data. A public version waits for step 11.
+
+Checked: 3 tests run the page with no browser and a fake agent; one real question in Chrome (amounts displayed correctly, SQL section appeared, Deploy button gone); `netstat` shows it listening on `127.0.0.1` only. Stopping the usage stats is set in the config but wasn't separately checked.
+
+Test (PowerShell, in the project folder):
+
+```powershell
+uv run streamlit run app/chat.py
+```
+
+Expect a page at `http://localhost:8501`. Ask a question; Ctrl+C in the terminal stops it.
+
+Commit, short version:
+
+```
+git add pyproject.toml uv.lock CLAUDE.md src/analyst_agent/agent tests/agent docs
+git commit -m "feat(evals): score genie round a, 31 of 55"
+```
+
+Commit with a body:
+
+```
+git add pyproject.toml uv.lock CLAUDE.md src/analyst_agent/agent tests/agent docs
+git commit -m "feat(evals): score genie round a, 31 of 55" -m "- uv run eval --genie, paced; score the written answer, record the tables as a hint
+- scorer: plain dollar zero counts, more refusal wordings, a reference with no rows means no data
+- add streamlit as a dev dependency for the chat page
+- agent 53/55, genie with tables only 31/55; the gate is round b"
+```
+
 ## Open items
 
 - **Read-only identity:** `run_sql` uses my own login; the guardrail is the SQL parser only.
@@ -518,5 +612,7 @@ git commit -m "feat(genie): create baseline genie space and ask it from code" -m
 - **Data leakage:** test material (questions or their answers) showing up in what the system learns from, here the semantic layer's examples. It inflates the score.
 - **Flaky test:** one that passes or fails from run to run with no change. Judge it over several runs, not one.
 - **Stop rule:** deciding in advance when to stop tuning for one failure, so the fix doesn't turn into overfitting.
+- **Vacuous pass:** a check that passes because there was nothing to check, like q08's empty reference.
+- **Streamlit rerun model:** the whole script runs again on every interaction; `st.session_state` is what survives.
 - **Baseline:** the simple or existing option you compare against. A score means little until you know what the easy alternative gets.
 - **Eventual consistency:** a change is saved, but a read right afterwards may not show it yet. Here, a new Genie space took a few seconds to appear in the list.

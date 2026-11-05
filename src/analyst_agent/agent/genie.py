@@ -53,16 +53,17 @@ def setup_space() -> tuple[str, bool]:
 
 
 def answer_from(message, fetch_table) -> GenieAnswer:
-    """Turn Genie's reply into plain text, SQL and tables. A reply is a list of attachments: text or a query.
-    `fetch_table(attachment_id)` gets a query's result, which isn't part of the message."""
+    """Turn Genie's reply into plain text, SQL and tables. A reply is a list of attachments: a query, its
+    written answer, suggested questions, a chart. The text is the written answer only, as with the agent: a
+    query's description just restates the question. `fetch_table(attachment_id)` gets a query's result, which
+    isn't part of the message."""
     answer = GenieAnswer(status=message.status.value if message.status else "UNKNOWN")
     texts = []
     for attachment in message.attachments or []:
-        if attachment.text and attachment.text.content:
-            texts.append(attachment.text.content)
+        text = attachment.text
+        if text and text.content and (text.purpose is None or "ANSWER" in text.purpose.value):
+            texts.append(text.content)
         if attachment.query:
-            if attachment.query.description:
-                texts.append(attachment.query.description)
             answer.sql.append(attachment.query.query)
             answer.tables.append(fetch_table(attachment.attachment_id))
     answer.text = "\n\n".join(texts)
@@ -75,10 +76,13 @@ def ask_genie(space_id: str, question: str) -> GenieAnswer:
     message = genie.start_conversation_and_wait(space_id, question)
 
     def fetch_table(attachment_id: str) -> dict:
-        result = genie.get_message_attachment_query_result(
-            space_id, message.conversation_id, message.message_id, attachment_id).statement_response
-        columns = [c.name for c in result.manifest.schema.columns]
-        return {"columns": columns, "rows": (result.result.data_array if result.result else None) or []}
+        try:
+            result = genie.get_message_attachment_query_result(
+                space_id, message.conversation_id, message.message_id, attachment_id).statement_response
+            columns = [c.name for c in result.manifest.schema.columns]
+            return {"columns": columns, "rows": (result.result.data_array if result.result else None) or []}
+        except Exception as e:  # a missing table shouldn't lose the written answer
+            return {"columns": [], "rows": [], "error": f"{type(e).__name__}: {e}"}
 
     return answer_from(message, fetch_table)
 

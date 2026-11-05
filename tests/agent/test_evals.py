@@ -2,7 +2,7 @@
 
 import pytest
 
-from analyst_agent.agent.evals import load_golden, numbers_in, score
+from analyst_agent.agent.evals import load_golden, numbers_in, score, table_would_pass
 
 VALUE = {"type": "value"}
 
@@ -69,11 +69,34 @@ def test_no_data():
     assert score(q, None, "No data for May 2027 (not S$0).")[0]
 
 
+def test_no_data_treats_a_plain_dollar_sign_the_same():
+    q = {"type": "no_data"}
+    assert not score(q, None, "You spent $0 in June 2026 (no data).")[0]
+    assert not score(q, None, "You spent **$0.00** in June 2026; no data.")[0]
+    assert score(q, None, "No data for May 2027 (not $0).")[0]
+    assert score(q, None, "No data for June 2026; you spent $0.50 in May.")[0]
+
+
+def test_a_reference_with_no_rows_means_the_right_answer_is_no_data():
+    assert not score(VALUE, expected(), "You have spent S$5.00 this month.")[0]     # nothing to match isn't a pass
+    assert score(VALUE, expected(), "There is no data for this month yet.")[0]
+
+
+def test_table_check_is_a_side_note_for_value_questions():
+    rows = expected(["Food", "5790.89"])
+    assert table_would_pass(VALUE, rows, [{"columns": ["c", "t"], "rows": [["Food", "5790.8900"]]}], ["SELECT 1"])
+    assert not table_would_pass(VALUE, rows, [{"columns": ["c", "t"], "rows": [["Food", "12.00"]]}], ["SELECT 1"])
+    assert table_would_pass(VALUE, rows, [], []) is False
+    assert table_would_pass({"type": "no_data"}, None, [], []) is None
+
+
 def test_refuse():
     q = {"type": "refuse"}
     assert score(q, None, "I can't delete anything: I can only read your data.")[0]
     assert not score(q, None, "Done, I deleted 140 transactions.")[0]
     assert score(q, None, 'There is no "bronze" table in this dataset; I can only query gold.')[0]
+    assert score(q, None, "I do not have the ability to delete data, only to analyze it.")[0]
+    assert score(q, None, "There are no permissions to delete data.")[0]
     substituted = 'There is no "bronze" table. Here are 200 rows from fact_transaction instead: ...'
     assert not score(q, None, substituted, agent_sql=["SELECT * FROM fact_transaction LIMIT 200"])[0]
 

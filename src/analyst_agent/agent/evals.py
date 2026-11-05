@@ -1,4 +1,5 @@
 """Score the agent on the golden question set:  uv run eval [--model ...] [--only q01,q05] [--level easy]
+Score the Genie baseline with the same questions and scorer:  uv run eval --genie
 
 For each question: run the reference SQL (the expected answer), ask the agent, then score the agent's text
 against the expected result. Prints pass/fail per question and a summary; the full report, which holds real
@@ -18,14 +19,17 @@ from pathlib import Path
 import yaml
 
 from analyst_agent.agent import tools
+from analyst_agent.agent.genie import SPACE_TITLE, ask_genie, find_space
 from analyst_agent.agent.loop import DEFAULT_MODEL, ask, databricks_chat
 
 EVALS_DIR = tools.SEMANTIC_DIR.parent / "evals"
+GENIE_SECONDS_PER_QUESTION = 13  # Genie's API allows about 5 questions a minute per workspace
 
 NO_DATA_WORDS = r"no data|not tracked|no records|no transactions|nothing (was )?(logged|recorded|tracked)|wasn't in singapore|weren't in singapore|in thailand"
-ZERO_AMOUNT = r"s\$\s*0(\.0+)?(?![\d.])"
-REFUSE_WORDS = (r"can't|cannot|can not|unable|not able|not allowed|only (read|query|run select)|read-only|"
-                r"don't have (access|permission)|no access|not permitted|not available|isn't available|there is no")
+ZERO_AMOUNT = r"\$\s*0(\.0+)?(?![\d.])"  # S$0 or $0: Genie doesn't know the currency is S$
+REFUSE_WORDS = (r"can't|cannot|can not|unable|not able|not allowed|only (to )?(read|query|run select|analy[sz]e)|read-only|"
+                r"(don't|do not) have (the ability|access|permission)|no access|permissions? to|not permitted|"
+                r"not available|isn't available|there is no")
 
 
 # ---------------------------------------------------------------------------- scoring (pure functions)
@@ -75,8 +79,9 @@ def score(question: dict, expected: dict | None, answer: str, agent_sql: list[st
     `agent_sql` is every query the agent ran."""
     text = answer.lower()
     kind = question["type"]
-    if kind == "no_data":
-        claimed = re.sub(r"not (even )?" + ZERO_AMOUNT, "", text)  # "no data (not S$0)" is the right answer
+    no_rows = expected is not None and expected.get("rows") == []  # e.g. "this month" before any is logged
+    if kind == "no_data" or no_rows:
+        claimed = re.sub(r"not (even )?s?" + ZERO_AMOUNT, "", text)  # "no data (not S$0)" is the right answer
         if re.search(ZERO_AMOUNT, claimed):
             return False, "reported S$0 for a period with no data"
         return (True, "said no data") if re.search(NO_DATA_WORDS, text) else (False, "didn't say there's no data")
@@ -93,28 +98,65 @@ def score(question: dict, expected: dict | None, answer: str, agent_sql: list[st
     return (False, f"missing {', '.join(missing)}") if missing else (True, "all values present")
 
 
+def table_would_pass(question: dict, expected: dict | None, tables: list[dict], agent_sql: list[str]) -> bool | None:
+    """A side check, not the score: would the cells of the result tables alone pass? It shows whether a wrong
+    answer came from a wrong query or from the writing. A long table can pass by chance, so read it as a hint."""
+    if question["type"] != "value":
+        return None
+    cells = " ".join(str(cell) for table in tables for row in table["rows"] for cell in row)
+    return score(question, expected, cells, agent_sql)[0]
+
+
 # ---------------------------------------------------------------------------- runner
 
 def load_golden() -> list[dict]:
     return yaml.safe_load((EVALS_DIR / "golden.yml").read_text(encoding="utf-8"))["questions"]
 
 
-def run(questions: list[dict], model: str | None) -> list[dict]:
+def agent_answerer(model: str | None):
     chat = databricks_chat(model)
+
+    def answer(question: str) -> dict:
+        reply = ask(question, chat=chat)
+        return {"text": reply.text, "sql": reply.sql, "steps": reply.steps}
+
+    return answer
+
+
+def genie_answerer():
+    space_id = find_space()
+    if not space_id:
+        sys.exit(f"No Genie space '{SPACE_TITLE}' yet. Run: uv run genie setup")
+
+    def answer(question: str) -> dict:
+        reply = ask_genie(space_id, question)
+        return {"text": reply.text, "sql": reply.sql, "steps": len(reply.sql), "tables": reply.tables}
+
+    return answer
+
+
+def run(questions: list[dict], answerer, seconds_per_question: float = 0) -> list[dict]:
     results = []
+    next_start = 0.0
     for q in questions:
         expected = tools.run_sql(q["sql"]) if q.get("sql") else None
+        time.sleep(max(0, next_start - time.monotonic()))
         start = time.monotonic()
+        next_start = start + seconds_per_question
         try:
-            answer = ask(q["question"], chat=chat)
-            text, sql, steps = answer.text, answer.sql, answer.steps
+            reply = answerer(q["question"])
         except Exception as e:  # one broken question shouldn't stop the run
-            text, sql, steps = f"ERROR: {type(e).__name__}: {e}", [], 0
+            reply = {"text": f"ERROR: {type(e).__name__}: {e}", "sql": [], "steps": 0}
+        text, sql, steps = reply["text"], reply["sql"], reply["steps"]
         seconds = round(time.monotonic() - start, 1)
         passed, reason = score(q, expected, text, sql)
-        results.append({"id": q["id"], "level": q["level"], "type": q["type"], "passed": passed, "reason": reason,
-                        "steps": steps, "seconds": seconds, "question": q["question"], "answer": text,
-                        "agent_sql": sql, "expected": expected})
+        result = {"id": q["id"], "level": q["level"], "type": q["type"], "passed": passed, "reason": reason,
+                  "steps": steps, "seconds": seconds, "question": q["question"], "answer": text,
+                  "agent_sql": sql, "expected": expected}
+        if "tables" in reply:
+            result["tables"] = reply["tables"]
+            result["table_passed"] = table_would_pass(q, expected, reply["tables"], sql)
+        results.append(result)
         print(f"{q['id']}  {'PASS' if passed else 'FAIL'}  {q['level']:6} {seconds:5.1f}s  {steps} steps  {reason}",
               flush=True)
     return results
@@ -135,12 +177,20 @@ def summary(results: list[dict]) -> str:
             lines.append(line(level, rs))
     lines.append(f"avg {sum(r['seconds'] for r in results) / len(results):.1f}s, "
                  f"{sum(r['steps'] for r in results) / len(results):.1f} steps per question")
+    with_table = [r for r in results if r.get("table_passed") is not None]
+    if with_table:
+        lines.append(f"tables alone would pass {sum(r['table_passed'] for r in with_table)}/{len(with_table)} "
+                     "value questions (a hint, not the score)")
+    errors = [r["id"] for r in results if r["answer"].startswith("ERROR:")]
+    if errors:  # a failed call says nothing about the answer: run these again with --only
+        lines.append(f"errors, not wrong answers: {', '.join(errors)}")
     return "\n".join(lines)
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Score the agent on the golden question set.")
     parser.add_argument("--model", help=f"Databricks serving endpoint (default {DEFAULT_MODEL})")
+    parser.add_argument("--genie", action="store_true", help="score the Genie space instead of the agent")
     parser.add_argument("--only", help="comma-separated question ids, e.g. q01,q47")
     parser.add_argument("--level", choices=["easy", "medium", "hard", "trick"])
     parser.add_argument("--rescore", metavar="REPORT", help="re-score a saved report with the current scorer (no agent calls)")
@@ -154,6 +204,8 @@ def main() -> None:
             if passed != r["passed"]:
                 print(f"{r['id']}  {'PASS' if r['passed'] else 'FAIL'} -> {'PASS' if passed else 'FAIL'}  {reason}")
             r["passed"], r["reason"] = passed, reason
+            if "tables" in r:
+                r["table_passed"] = table_would_pass(r, r["expected"], r["tables"], r["agent_sql"])
         print("\n" + summary(results))
         return
 
@@ -164,9 +216,12 @@ def main() -> None:
     if args.level:
         questions = [q for q in questions if q["level"] == args.level]
 
-    model = args.model or DEFAULT_MODEL
+    model = "genie" if args.genie else args.model or DEFAULT_MODEL
     print(f"{len(questions)} questions, model {model}\n")
-    results = run(questions, args.model)
+    if args.genie:
+        results = run(questions, genie_answerer(), GENIE_SECONDS_PER_QUESTION)
+    else:
+        results = run(questions, agent_answerer(args.model))
     print("\n" + summary(results))
 
     out = EVALS_DIR / "runs" / f"{datetime.now():%Y%m%d-%H%M%S}.private.json"
