@@ -3,7 +3,9 @@
 from enum import Enum
 from types import SimpleNamespace as NS
 
-from analyst_agent.agent.genie import answer_from, space_definition
+from analyst_agent.agent.evals import load_golden
+from analyst_agent.agent.genie import answer_from, qualified, space_definition
+from analyst_agent.agent.tools import load_dataset
 
 
 class Status(Enum):
@@ -20,6 +22,25 @@ def test_space_definition_lists_sorted_full_table_names_and_nothing_else():
     definition = space_definition(dataset)
     assert [t["identifier"] for t in definition["data_sources"]["tables"]] == ["cat.gold.a_table", "cat.gold.b_table"]
     assert "instructions" not in definition    # out of the box: none of our rules or examples
+
+
+def test_knowledge_holds_the_whole_semantic_layer_and_no_golden_question():
+    dataset = load_dataset("money")
+    instructions = space_definition(dataset, knowledge=True)["instructions"]
+    text = instructions["text_instructions"][0]["content"][0]
+    assert all(rule.strip() in text for rule in dataset["rules"])
+    assert all(f"Table {t}:" in text for t in dataset["tables"]) and "item_clean" in text and "living_spend:" in text
+
+    examples = instructions["example_question_sqls"]
+    assert len(examples) == len(dataset["examples"])
+    assert [e["id"] for e in examples] == sorted(e["id"] for e in examples)
+    assert not {q for e in examples for q in e["question"]} & {q["question"] for q in load_golden()}  # no leakage
+
+
+def test_examples_get_full_table_names():
+    dataset = {"catalog": "cat", "schema": "gold"}
+    sql = qualified("SELECT SUM(f.x) FROM fact f JOIN dim d ON d.a = f.a", dataset)
+    assert "cat.gold.fact AS f" in sql and "cat.gold.dim AS d" in sql
 
 
 def test_answer_is_the_written_answer_with_its_sql_and_tables():

@@ -568,6 +568,67 @@ git commit -m "feat(evals): score genie round a, 31 of 55" -m "- uv run eval --g
 - agent 53/55, genie with tables only 31/55; the gate is round b"
 ```
 
+## Step 9d: Genie with our knowledge (round B, the gate)
+
+`uv run genie teach` gives the space the whole semantic layer: description, rules, table and column meanings, and metrics as instructions, and the 4 examples as example SQL. A test confirms none of the examples is a golden question. Genie doesn't get the agent's system prompt or its ability to run several queries.
+
+Both ran on the same day, on the same data.
+
+| Level | Genie, tables only | Genie, with knowledge | Agent |
+| --- | --- | --- | --- |
+| Easy | 13/19 | 19/19 | 19/19 |
+| Medium | 11/21 | 19/21 | 19/21 |
+| Hard | 3/6 | 5/6 | 6/6 |
+| Trick | 4/9 | 9/9 | 9/9 |
+| **Total** | **31/55** | **52/55** | **53/55** |
+
+q49 first failed on Genie with a failed call, not a wrong answer. The summary reported it as an error, and it passed when run again, so round B counts as 52 (the saved full report says 51).
+
+All failures and passes on both sides were read by hand.
+
+| Question | Who failed | What happened |
+| --- | --- | --- |
+| q08 | Both | "This month" has no data yet. Both gave last month's total, clearly labelled, instead of saying no data. Passed on 31 Oct, when the month had data |
+| q33 | Agent | Worked out the weekday average itself from per-day results, against the prompt's rule. Slightly off. Flaky: it passed in the earlier runs |
+| q20 | Genie | Counted the share of purchases; the reference uses the share of money. **The question is ambiguous**, and "purchases" as a count is a fair reading. A test problem more than a Genie mistake |
+| q46 | Genie | A filter dropped the payback rows, so the total was too high. A real mistake |
+
+Two softer points on the agent's side: its q17 answer was a cent off, inside the tolerance (Genie's was exact), and its q49 answer gave a wrong reason for the right result.
+
+### What this means
+
+- **By the rule fixed in advance, the agent passes, 53 to 52. That's effectively a tie.** One question is within the noise: the agent's own runs miss different questions, and if q20 were counted as a fair answer the score would be level.
+- **The knowledge did almost all the work.** The same Genie went from 31 to 52 with only the semantic layer added. That's the main result of Phase 3: the semantic layer is the valuable part, and it works outside this agent.
+- **The golden set can't separate them any more.** Both are near the ceiling, and the semantic layer was tuned on these same questions, so both benefit from that. Only new questions would show how well it holds up.
+- **Accuracy isn't the only difference, but those advantages aren't measured here.** The agent's loop can run several queries and fix its own errors, its model can be swapped, its guardrails are in tested code, and it has no Genie rate limit. It averaged 6.5 s a question against 14.8 s for Genie, measured with both running at once. Whether the loop helps on harder, multi-step questions is untested.
+
+Test (PowerShell, in the project folder; the agent about 6 minutes, Genie about 15–20):
+
+```powershell
+uv run pytest tests/agent
+uv run genie teach
+uv run eval --genie
+uv run eval
+```
+
+Expect both around 52–53/55, missing slightly different questions.
+
+Commit, short version:
+
+```
+git add src/analyst_agent/agent/genie.py tests/agent/test_genie.py docs
+git commit -m "feat(genie): teach genie the semantic layer, 52 vs agent 53"
+```
+
+Commit with a body:
+
+```
+git add src/analyst_agent/agent/genie.py tests/agent/test_genie.py docs
+git commit -m "feat(genie): teach genie the semantic layer, 52 vs agent 53" -m "- uv run genie teach: the whole semantic layer as instructions and example sql
+- same day: genie 31/55 with tables only, 52/55 with knowledge, agent 53/55
+- the agent passes the gate by one question, effectively a tie; the semantic layer did most of the work"
+```
+
 ## Open items
 
 - **Read-only identity:** `run_sql` uses my own login; the guardrail is the SQL parser only.
@@ -614,5 +675,7 @@ git commit -m "feat(evals): score genie round a, 31 of 55" -m "- uv run eval --g
 - **Stop rule:** deciding in advance when to stop tuning for one failure, so the fix doesn't turn into overfitting.
 - **Vacuous pass:** a check that passes because there was nothing to check, like q08's empty reference.
 - **Streamlit rerun model:** the whole script runs again on every interaction; `st.session_state` is what survives.
+- **Noise:** the variation between runs with nothing changed. A difference smaller than the noise isn't evidence.
+- **Held-out questions:** test questions kept away from all tuning, so the score shows how well the system handles what it hasn't seen.
 - **Baseline:** the simple or existing option you compare against. A score means little until you know what the easy alternative gets.
 - **Eventual consistency:** a change is saved, but a read right afterwards may not show it yet. Here, a new Genie space took a few seconds to appear in the list.
