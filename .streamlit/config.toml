@@ -1,0 +1,9 @@
+# The chat page shows real data: reachable from this laptop only, no Deploy button, no usage stats sent to Streamlit.
+[server]
+address = "localhost"
+
+[client]
+toolbarMode = "minimal"
+
+[browser]
+gatherUsageStats = false
