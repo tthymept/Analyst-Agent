@@ -413,6 +413,67 @@ git commit -m "feat(agent): fix agent from eval failures, 47 to 53 of 55" -m "- 
 - eval: 47/55 -> 53/55 (same scorer); q24 still flaky"
 ```
 
+## Step 9a: can we run Genie from code?
+
+**Genie** is Databricks' built-in "ask your data" assistant. It's the baseline: the free option the agent has to beat, or the custom work wasn't worth it.
+
+Read-only checks, nothing changed:
+
+- The Genie API responds on Free Edition, and the workspace already has a sample space.
+- The Python SDK has `create_space` and `start_conversation_and_wait`, so both setup and questions can be scripted.
+- A space is defined by a JSON document (`serialized_space`), with slots for tables, text instructions and example SQL. Those slots match our semantic rules and examples.
+- Speed: about 5 questions a minute per workspace, according to Databricks community posts. **Not verified** in the official docs or for Free Edition.
+
+### The rule, fixed before seeing any scores
+
+Two rounds on one space:
+
+- **Round A, out of the box:** the tables only.
+- **Round B, with our knowledge:** the same space plus our semantic rules and the 4 leak-free examples.
+
+**The gate is round B**, the fair comparison. Choosing the rule after seeing the scores would let the result pick the rule.
+
+## Step 9b: create the space, ask one question
+
+`src/analyst_agent/agent/genie.py`, with the command `uv run genie`:
+
+- `space_definition`: the space's contents. Tables only for now.
+- `setup_space`: creates the space, or finds it by title if it exists. The id is never written down, so it can't end up in this public repo.
+- `answer_from`: Genie's reply is a list of attachments (text or a query). This turns them into text, SQL and tables. Tested with a fake message.
+- `ask_genie`: one question in a new conversation, so each question starts fresh, like the agent.
+
+What the first run showed:
+
+- **The space was created,** but the lookup straight afterwards didn't find it. A few seconds later it was listed, once. The listing lags slightly behind a create (**eventual consistency**). Don't run `setup` twice in quick succession, or it could make a second space.
+- **The test question worked** and matched a separate reference query. The question isn't in the golden set. One question says nothing about Genie's quality; it only proves the plumbing.
+- **Genie's reply has a different shape from the agent's:** first a line restating the question (the query's description), then the answer in text, plus its query and result table. The scorer has to handle this fairly, which is a decision for step 9c.
+
+Test (PowerShell, in the project folder):
+
+```powershell
+uv run pytest tests/agent
+uv run genie setup
+uv run genie ask "How many everyday purchases did I make in November 2025?"
+```
+
+Expect the tests to pass; "already exists"; then a status of COMPLETED with text, a query and a table.
+
+Commit, short version:
+
+```
+git add pyproject.toml src/analyst_agent/agent/genie.py tests/agent/test_genie.py docs
+git commit -m "feat(genie): create baseline genie space and ask it from code"
+```
+
+Commit with a body:
+
+```
+git add pyproject.toml src/analyst_agent/agent/genie.py tests/agent/test_genie.py docs
+git commit -m "feat(genie): create baseline genie space and ask it from code" -m "- uv run genie setup: create the space on the gold tables, found by title so no id is in the repo
+- uv run genie ask: one question in a new conversation, with text, sql and tables
+- fix the gate before scoring: the agent must beat genie with our rules and examples"
+```
+
 ## Open items
 
 - **Read-only identity:** `run_sql` uses my own login; the guardrail is the SQL parser only.
@@ -457,3 +518,5 @@ git commit -m "feat(agent): fix agent from eval failures, 47 to 53 of 55" -m "- 
 - **Data leakage:** test material (questions or their answers) showing up in what the system learns from, here the semantic layer's examples. It inflates the score.
 - **Flaky test:** one that passes or fails from run to run with no change. Judge it over several runs, not one.
 - **Stop rule:** deciding in advance when to stop tuning for one failure, so the fix doesn't turn into overfitting.
+- **Baseline:** the simple or existing option you compare against. A score means little until you know what the easy alternative gets.
+- **Eventual consistency:** a change is saved, but a read right afterwards may not show it yet. Here, a new Genie space took a few seconds to appear in the list.
